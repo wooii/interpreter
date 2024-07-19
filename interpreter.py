@@ -13,14 +13,9 @@ import matplotlib.pyplot as plt
 from translate import Translator
 from pathlib import Path
 from openai import OpenAI
-from ai import keys, data_folder
-client = OpenAI(api_key=keys["openai_api_key"])
+from config import keys, data_folder, openai_api_pricing
 
-openai_api_pricing = {
-    "whisper-1": {"per_second": 0.0001},
-    "tts-1": {"per_character": 0.000015},
-    "tts-1-hd": {"per_character": 0.00003},
-}
+client = OpenAI(api_key=keys["openai_api_key"])
 
 
 class AudioProcessor:
@@ -97,7 +92,7 @@ class TextTranslator:
 
 def openai_whisper(audio_file_path):
     with open(audio_file_path, 'rb') as audio_file:
-         return client.audio.transcriptions.create(model="whisper-1", file=audio_file)
+        return client.audio.transcriptions.create(model="whisper-1", file=audio_file)
 
 
 def openai_tts(text, speech_file_path):
@@ -110,6 +105,7 @@ def openai_tts(text, speech_file_path):
 if False:
     models_all = client.models.list()
     models_all_id = sorted([i.id for i in models_all])
+    openai_api_pricing
 
 
 # %% test AudioProcessor
