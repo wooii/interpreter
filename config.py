@@ -1,6 +1,8 @@
 import os
 import yaml
 from pathlib import Path
+from openai import OpenAI
+
 
 # Avoid duplicate OpenMP runtime conflict.
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -17,3 +19,12 @@ with open(data_folder / "api/api_keys_for_ai.yaml", "r") as keys_file:
 # OpenAI api pricing
 with open("openai_api_pricing.yaml", "r") as file:
     openai_api_pricing = yaml.safe_load(file)
+
+client = OpenAI(api_key=keys["openai_api_key"])
+
+
+# %% List all openai models
+if False:
+    models_all = client.models.list()
+    models_all_id = sorted([i.id for i in models_all])
+    openai_api_pricing
