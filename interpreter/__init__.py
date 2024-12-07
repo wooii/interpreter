@@ -16,12 +16,11 @@ if not data_folder.exists():
 with open(data_folder / "api/api_keys_for_ai.yaml", "r") as keys_file:
     keys = yaml.safe_load(keys_file)
 
-# OpenAI api pricing
-with open("openai_api_pricing.yaml", "r") as file:
-    openai_api_pricing = yaml.safe_load(file)
-
 client = OpenAI(api_key=keys["openai_api_key"])
 
+# OpenAI api pricing
+with open("interpreter/openai_api_pricing.yaml", "r") as file:
+    openai_api_pricing = yaml.safe_load(file)
 
 # %% List all openai models
 if False:

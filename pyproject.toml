@@ -1,0 +1,33 @@
+# Created on Fri Jun  7 08:44:53 2024
+# @author: Chenfeng Chen
+
+
+[project]
+name = "interpreter"
+description = "A interpreter"
+version = "0.1"
+readme = "README.md"
+license = {text = "MIT Licence"}
+authors = [{name = "Chenfeng Chen"}]
+keywords = ["ai", "trade"]
+requires-python = ">=3.10"
+dependencies = [
+    "whisper",
+    "wavio",
+    "sounddevice",
+    "soundfile",
+    "gtts",
+    "translate",
+    "evaluate",
+    "transformers",
+]
+
+
+[tool.setuptools.packages.find]
+exclude = ["configs", "scripts"]
+include = ["trade"]
+
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

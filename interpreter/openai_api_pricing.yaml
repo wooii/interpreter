@@ -1,0 +1,27 @@
+# OpenAI API costs are billed in US dollars.
+currency: USD
+
+models:
+  gpt-4o:
+    per_input_token: 0.0000025
+    per_output_token: 0.00001
+  gpt-4o-mini:
+    per_input_token: 0.00000015
+    per_output_token: 0.0000006
+  whisper-1:
+    per_second: 0.0001
+  tts-1:
+    per_character: 0.000015
+  tts-1-hd:
+    per_character: 0.000030
+  dall-e-3:
+    per_image:
+      x1024: 0.04
+      x1792: 0.08
+
+assistants:
+  code_interpreter:
+    per_session: 0.03
+  file_search:
+    per_GB: 0.1
+    free_quota_GB: 1
