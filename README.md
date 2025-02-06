@@ -1,8 +1,12 @@
 # Interpreter
 i am trying to build a real time transcription tool using python and openai's whisper,
-however here is a major problem to solve. my approach is record a set duration of audio and then
+however here is a major problem to solve: my approach is record a set duration of audio and then
 send it to openai's api or a local model, however this may cause cut off of the speech and
 eventually lose information. for words that are not common, add translation to it.
+
+
+I am trying to build a audio model based on whisper that can understand a specific
+dialect. So the first step is finetune a whisper model.
 
 
 ## Installation

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from gtts import gTTS
 from translate import Translator
 from pathlib import Path
-from interpreter import client, data_folder, openai_api_pricing
+from interpreter import client, data_folder
 
 
 class AudioDataProcessor:
@@ -73,7 +73,6 @@ class AudioFileProcessor(AudioDataProcessor):
 
 
 class SpeechToText:
-
     def __init__(self, model_name="base"):
         self.model = whisper.load_model("base")
 
@@ -102,13 +101,6 @@ def openai_tts(text, speech_file_path):
     return print(f"Saved speech to {speech_file_path}.")
 
 
-if __name__ == "__main__":
-    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
-    openai_speech_file_path = data_folder / "interpreter" / "openai_speech_audio.mp3"
-    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
-
-
-
 def record_and_transcribe():
     print("Starting transcription, please speak...")
 
@@ -118,15 +110,18 @@ def record_and_transcribe():
         transcription = openai_whisper(audio_file_path)
         print(f"{transcription.text}")
 
-record_and_transcribe()
 
+if __name__ == "__main__":
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
+    openai_speech_file_path = data_folder / "interpreter" / "openai_speech_audio.mp3"
+    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
 
 
 # %% test AudioProcessor
 if False:
 
     self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
-    self.record(duration_seconds=2)
+    self.record(duration_seconds=3)
     # self.convert_format(output_format='mp3')
     self.play()
     self.plot()
@@ -170,3 +165,8 @@ if False:
     self = AudioFileProcessor(local_speech_file_path, sampling_rate=16000)
     self.play()
     self.plot()
+
+
+# %% test record_and_transcribe
+if False:
+    record_and_transcribe()

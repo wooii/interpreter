@@ -3,11 +3,14 @@ currency: USD
 
 models:
   gpt-4o:
-    per_input_token: 0.0000025
-    per_output_token: 0.00001
+    per_input_token:  0.0000025
+    per_output_token: 0.000010
   gpt-4o-mini:
-    per_input_token: 0.00000015
+    per_input_token:  0.00000015
     per_output_token: 0.0000006
+  o1-mini:
+    per_input_token:  0.0000011
+    per_output_token: 0.0000044
   whisper-1:
     per_second: 0.0001
   tts-1:

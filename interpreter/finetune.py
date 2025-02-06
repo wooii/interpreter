@@ -18,26 +18,26 @@ try:
     from google.colab import userdata
     hf_api_key = userdata.get('HF_TOKEN')
 except ImportError:
-    from interpreter.config import keys
+    from interpreter import keys
     hf_api_key = keys["hugging_face_api_key"]
 
 
 class DatasetHandler:
-    def __init__(self, dataset_name, language, subset_size):
+    def __init__(self, dataset_name: str = "mozilla-foundation/common_voice_16_1",
+                 language: str = "zh-TW",
+                 streaming: bool = False,  # MacOS does not support streaming.
+                 ):
         self.dataset_name = dataset_name
         self.language = language
-        self.subset_size = subset_size
+        self.streaming = streaming
         self.subsets = ["train", "validation", "test"]
 
-    def _load_subset(self, split):
-        dataset_iter = load_dataset(self.dataset_name, self.language, split=split,
-                                    token=hf_api_key, streaming=True, trust_remote_code=True)
-        return list(dataset_iter.take(self.subset_size))
+    def _load_split(self, split):
+        return load_dataset(self.dataset_name, self.language, split=split,
+                            token=hf_api_key, streaming=self.streaming, trust_remote_code=True)
 
     def prepare_dataset(self):
-        dataset = DatasetDict({
-            split: Dataset.from_list(self._load_subset(split)) for split in self.subsets
-        })
+        dataset = DatasetDict({split: self._load_split(split) for split in self.subsets})
         dataset = dataset.select_columns(["audio", "sentence"])
         dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
         return dataset
@@ -80,14 +80,15 @@ class WhisperTrainer:
 
     def prepare_dataset(self, batch):
         audio = batch["audio"]
-        batch["input_features"] = self.feature_extractor(audio["array"],
-                                                         sampling_rate=audio["sampling_rate"]).input_features[0]
+        batch["input_features"] = self.feature_extractor(
+            audio["array"],
+            sampling_rate=audio["sampling_rate"]).input_features[0]
         batch["labels"] = self.tokenizer(batch["sentence"]).input_ids
         return batch
 
     def process_common_voice(self):
         common_voice = self.dataset_handler.prepare_dataset()
-        common_voice = common_voice.map(self.prepare_dataset, num_proc=4)
+        common_voice = common_voice.map(self.prepare_dataset, num_proc=1)
         return common_voice
 
     def compute_metrics(self, pred):
@@ -128,7 +129,7 @@ class WhisperTrainer:
             warmup_steps=10,
             max_steps=20,
             gradient_checkpointing=True,
-            fp16=True,
+            fp16=False,
             evaluation_strategy="steps",
             per_device_eval_batch_size=8,
             predict_with_generate=True,
@@ -177,24 +178,31 @@ class WhisperTrainer:
         print("Transcription:", transcription)
 
 
+
 # %% test
-dataset_handler = DatasetHandler(dataset_name="mozilla-foundation/common_voice_16_1",
-                                 language="zh-CN",
-                                 subset_size=100)
+if __name__ == "__main__":
+    dataset_handler = DatasetHandler(dataset_name="mozilla-foundation/common_voice_16_1",
+                                    language="zh-TW",
+                                    streaming=False)
 
-# Set `use_pretrained` to False if you want to train from scratch
-whisper_trainer = WhisperTrainer(model_name="openai/whisper-tiny",
-                                 language="chinese",
-                                 task="transcribe",
-                                 dataset_handler=dataset_handler,
-                                 use_pretrained=True)
+    common_voice = dataset_handler.prepare_dataset()
 
-common_voice = whisper_trainer.process_common_voice()
-trainer = whisper_trainer.train(common_voice)
+    #list(common_voice["train"].take(100))
 
-# Evaluate model
-sample = common_voice["test"][0]
-whisper_trainer.evaluate(sample)
+
+    # Set `use_pretrained` to False if you want to train from scratch
+    whisper_trainer = WhisperTrainer(model_name="openai/whisper-tiny",
+                                    language="chinese",
+                                    task="transcribe",
+                                    dataset_handler=dataset_handler,
+                                    use_pretrained=True)
+
+    common_voice = whisper_trainer.process_common_voice()
+    trainer = whisper_trainer.train(common_voice)
+
+    # Evaluate model
+    sample = common_voice["test"][0]
+    whisper_trainer.evaluate(sample)
 
 
 
