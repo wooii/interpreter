@@ -2,28 +2,41 @@
 
 Reference: https://huggingface.co/blog/fine-tune-whisper
 
+
+%pip install --upgrade pip
+%pip install --upgrade torch datasets evaluate transformers tensorboard soundfile librosa jiwer
+
+
 Created on Sat Aug 17 19:22:43 2024
 @author: Chenfeng Chen
 """
 
 import torch
 import evaluate
-from datasets import load_dataset, Dataset, DatasetDict, Audio
-from transformers import WhisperFeatureExtractor, WhisperTokenizer
-from transformers import WhisperProcessor, WhisperForConditionalGeneration, WhisperConfig
-from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer
 from dataclasses import dataclass
 from typing import Any, Dict, List
+from datasets import load_dataset, DatasetDict, Audio
+from transformers import (
+    WhisperFeatureExtractor, 
+    WhisperTokenizer,
+    WhisperProcessor, 
+    WhisperForConditionalGeneration, 
+    WhisperConfig,
+    Seq2SeqTrainingArguments, 
+    Seq2SeqTrainer,
+    )
+
 try:
     from google.colab import userdata
     hf_api_key = userdata.get('HF_TOKEN')
 except ImportError:
     from interpreter import keys
     hf_api_key = keys["hugging_face_api_key"]
-
+    
 
 class DatasetHandler:
-    def __init__(self, dataset_name: str = "mozilla-foundation/common_voice_16_1",
+    def __init__(self, 
+                 dataset_name: str = "mozilla-foundation/common_voice_16_1",
                  language: str = "zh-TW",
                  streaming: bool = False,  # MacOS does not support streaming.
                  ):
@@ -65,12 +78,17 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         return batch
 
 
+
+class WhisperModel:
+    pass
+
+
 class WhisperTrainer:
-    def __init__(self, model_name, language, task, dataset_handler, use_pretrained=True):
+    def __init__(self, model_name, language, task, dataset, use_pretrained=True):
         self.model_name = model_name
         self.language = language
         self.task = task
-        self.dataset_handler = dataset_handler
+        self.dataset = dataset
         self.use_pretrained = use_pretrained
         self.processor = WhisperProcessor.from_pretrained(model_name, language=language, task=task)
         self.tokenizer = WhisperTokenizer.from_pretrained(model_name, language=language, task=task)
@@ -78,18 +96,17 @@ class WhisperTrainer:
         self.metric = evaluate.load("wer")
         self.model = self.initialize_model()
 
-    def prepare_dataset(self, batch):
+    def preprocess_dataset(self, batch):
         audio = batch["audio"]
         batch["input_features"] = self.feature_extractor(
             audio["array"],
-            sampling_rate=audio["sampling_rate"]).input_features[0]
+            sampling_rate=audio["sampling_rate"],
+            ).input_features[0]
         batch["labels"] = self.tokenizer(batch["sentence"]).input_ids
         return batch
 
     def process_common_voice(self):
-        common_voice = self.dataset_handler.prepare_dataset()
-        common_voice = common_voice.map(self.prepare_dataset, num_proc=1)
-        return common_voice
+        return self.dataset.map(self.preprocess_dataset, num_proc=1)
 
     def compute_metrics(self, pred):
         pred_ids = pred.predictions
@@ -104,20 +121,22 @@ class WhisperTrainer:
 
     def initialize_model(self):
         if self.use_pretrained:
-            # Load the pretrained model
             model = WhisperForConditionalGeneration.from_pretrained(self.model_name)
         else:
-            # Initialize a new model with random parameters
             config = WhisperConfig.from_pretrained(self.model_name)
             model = WhisperForConditionalGeneration(config)
-        # Set model configuration
+        
         model.config.forced_decoder_ids = None
         model.config.suppress_tokens = None
         model.gradient_checkpointing_enable()
         model.config.max_length = 225
+    
+        # Explicitly set pad_token_id
+
+        model.config.pad_token_id = self.tokenizer.pad_token_id  # Make sure this is different from eos_token_id
         return model
 
-    def train(self, common_voice, output_dir="./whisper_finetuned"):
+    def train(self, common_voice, output_dir="/Users/chen/Downloads/whisper_finetuned"):
         data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=self.processor)
 
         training_args = Seq2SeqTrainingArguments(
@@ -130,7 +149,7 @@ class WhisperTrainer:
             max_steps=20,
             gradient_checkpointing=True,
             fp16=False,
-            evaluation_strategy="steps",
+            eval_strategy="steps",
             per_device_eval_batch_size=8,
             predict_with_generate=True,
             generation_max_length=225,
@@ -151,7 +170,7 @@ class WhisperTrainer:
             eval_dataset=common_voice["validation"],
             data_collator=data_collator,
             compute_metrics=self.compute_metrics,
-            tokenizer=self.processor.feature_extractor,
+            processing_class=self.processor,  # Use this instead of tokenizer
         )
 
         trainer.train()
@@ -165,44 +184,46 @@ class WhisperTrainer:
             return_tensors="pt"
         ).input_features
 
-        if torch.cuda.is_available():
-            input_features = input_features.to("cuda")
-            self.model.to("cuda")
+        # Move model and inputs to the same device
+        device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
+        input_features = input_features.to(device)
+        self.model.to(device)
 
         self.model.eval()
         with torch.no_grad():
             generated_ids = self.model.generate(input_features)
 
         transcription = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        print("Reference:", sample["sentence"])
-        print("Transcription:", transcription)
+        print("True Transcription:", sample["sentence"])
+        print("Model Transcription:", transcription)
 
 
 
 # %% test
 if __name__ == "__main__":
     dataset_handler = DatasetHandler(dataset_name="mozilla-foundation/common_voice_16_1",
-                                    language="zh-TW",
-                                    streaming=False)
+                                     language="zh-TW",
+                                     streaming=False)
 
     common_voice = dataset_handler.prepare_dataset()
-
-    #list(common_voice["train"].take(100))
-
-
+    
+    common_voice_subset = DatasetDict({split: dataset.select(range(100)) for split, dataset in common_voice.items()})
+    # x = common_voice_subset["train"][0]
+    # a = x["audio"]['array']
+    
     # Set `use_pretrained` to False if you want to train from scratch
     whisper_trainer = WhisperTrainer(model_name="openai/whisper-tiny",
-                                    language="chinese",
-                                    task="transcribe",
-                                    dataset_handler=dataset_handler,
-                                    use_pretrained=True)
+                                     language="chinese",
+                                     task="transcribe",
+                                     dataset=common_voice,
+                                     use_pretrained=True)
 
-    common_voice = whisper_trainer.process_common_voice()
-    trainer = whisper_trainer.train(common_voice)
+    common_voice_processed = whisper_trainer.process_common_voice()
+    trainer = whisper_trainer.train(common_voice_processed)
 
-    # Evaluate model
-    sample = common_voice["test"][0]
+
+    # Evaluate
+    sample_raw = common_voice_subset["test"][0]
+    sample = common_voice_processed["test"][0]
     whisper_trainer.evaluate(sample)
-
-
 

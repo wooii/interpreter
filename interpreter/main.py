@@ -101,7 +101,7 @@ def openai_tts(text, speech_file_path):
     return print(f"Saved speech to {speech_file_path}.")
 
 
-def record_and_transcribe():
+def record_and_transcribe(audio_file_path):
     print("Starting transcription, please speak...")
 
     while True:
@@ -169,4 +169,4 @@ if False:
 
 # %% test record_and_transcribe
 if False:
-    record_and_transcribe()
+    record_and_transcribe(audio_file_path)

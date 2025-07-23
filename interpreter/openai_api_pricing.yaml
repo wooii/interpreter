@@ -8,7 +8,7 @@ models:
   gpt-4o-mini:
     per_input_token:  0.00000015
     per_output_token: 0.0000006
-  o1-mini:
+  o4-mini:
     per_input_token:  0.0000011
     per_output_token: 0.0000044
   whisper-1:
