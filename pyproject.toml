@@ -12,7 +12,7 @@ authors = [{name = "Chenfeng Chen"}]
 keywords = ["ai", "interpreter"]
 requires-python = ">=3.10"
 dependencies = [
-    "whisper",
+    "openai-whisper",
     "wavio",
     "sounddevice",
     "soundfile",

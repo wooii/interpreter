@@ -16,21 +16,22 @@ from interpreter import client, data_folder
 
 
 class AudioDataProcessor:
-    def __init__(self, audio_data: np.array, sampling_rate: int):
+    def __init__(self, audio_data: np.ndarray, sampling_rate: int):
         self.audio_data = audio_data
         self.sampling_rate = sampling_rate
 
     def play(self):
         return sd.play(data=self.audio_data, samplerate=self.sampling_rate)
 
-    def plot(self):
+    def plot_waveform(self):
         duration_seconds = len(self.audio_data) / self.sampling_rate
         time = np.linspace(0, duration_seconds, len(self.audio_data))
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(10, 4))
         plt.plot(time, self.audio_data)
         plt.title("Audio Waveform")
         plt.xlabel("Time (seconds)")
         plt.ylabel("Amplitude")
+        plt.tight_layout()
         plt.show()
 
 
@@ -71,10 +72,23 @@ class AudioFileProcessor(AudioDataProcessor):
         self._process_audio(sf.write, output_file_path, self.audio_data, self.sampling_rate)
         return output_file_path
 
+    def plot_mel_spectrogram(self):
+        """Load the audio file and plot its mel spectrogram using Whisper."""
+        audio = whisper.load_audio(self.audio_file_path)
+        mel = whisper.log_mel_spectrogram(audio)
+        plt.figure(figsize=(10, 6))
+        plt.imshow(mel, aspect='auto', origin='lower', cmap='viridis')
+        plt.colorbar(label='Log Mel Spectrogram')
+        plt.title('Mel Spectrogram')
+        plt.xlabel('Time')
+        plt.ylabel('Mel Frequency Bins')
+        plt.tight_layout()
+        plt.show()
+
 
 class SpeechToText:
     def __init__(self, model_name="base"):
-        self.model = whisper.load_model("base")
+        self.model = whisper.load_model(model_name)
 
     def transcribe(self, audio_file_path):
         return self.model.transcribe(str(audio_file_path))
@@ -101,7 +115,18 @@ def openai_tts(text, speech_file_path):
     return print(f"Saved speech to {speech_file_path}.")
 
 
-def record_and_transcribe(audio_file_path):
+def record_and_transcribe_using_local_model(audio_file_path):
+    print("Starting transcription, please speak...")
+    stt = SpeechToText(model_name="base")
+    while True:
+        audio_processor = AudioFileProcessor(audio_file_path, sampling_rate=16000)
+        audio_processor.record(duration_seconds=3)
+
+        transcription = stt.transcribe(audio_file_path)
+        print(f"{transcription["text"]}")
+
+
+def record_and_transcribe_using_openai_model(audio_file_path):
     print("Starting transcription, please speak...")
 
     while True:
@@ -111,62 +136,57 @@ def record_and_transcribe(audio_file_path):
         print(f"{transcription.text}")
 
 
-if __name__ == "__main__":
-    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
-    openai_speech_file_path = data_folder / "interpreter" / "openai_speech_audio.mp3"
-    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
-
-
 # %% test AudioProcessor
 if False:
-
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
     self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
-    self.record(duration_seconds=3)
-    # self.convert_format(output_format='mp3')
+    self.record(duration_seconds=5)
     self.play()
-    self.plot()
+    self.plot_waveform()
+    self.plot_mel_spectrogram()
+    # self.convert_format(output_format='mp3')
     # self = AudioDataProcessor(audio_data=audio_sample["array"], sampling_rate=16000)
 
 
 # %% test openai api
 if False:
-
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
+    openai_speech_file_path = data_folder / "interpreter" / "openai_speech_audio.mp3"
     transcription = openai_whisper(audio_file_path)
     text = transcription.text
     print(text)
-
     self = TextTranslator(target_language='zh')
     translation = self.translate(text)
     print(translation)
-
     openai_tts(translation, openai_speech_file_path)
-
     self = AudioFileProcessor(openai_speech_file_path, sampling_rate=16000)
     self.play()
-    self.plot()
+    self.plot_waveform()
 
 
 # %% test local models
 if False:
-
-    self = SpeechToText(model_name="base")  # tiny, base, small, medium, large
-    transcription = self.transcribe(audio_file_path)
-
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
+    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
+    stt = SpeechToText(model_name="base")  # tiny, base, small, medium, large
+    transcription = stt.transcribe(audio_file_path)
     text = transcription["text"]
     print(text)
-    self = TextTranslator(target_language='zh')
-    translation = self.translate(text)
+    translator = TextTranslator(target_language='zh')
+    translation = translator.translate(text)
     print(translation)
-
     language = 'zh'
     speech = gTTS(text=translation, lang=language, slow=False)
     speech.save(local_speech_file_path)
-
     self = AudioFileProcessor(local_speech_file_path, sampling_rate=16000)
     self.play()
-    self.plot()
+    self.plot_waveform()
 
 
 # %% test record_and_transcribe
 if False:
-    record_and_transcribe(audio_file_path)
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
+    # test local model
+    record_and_transcribe_using_local_model(audio_file_path)
+    # test OpenAI model
+    record_and_transcribe_using_openai_model(audio_file_path)
