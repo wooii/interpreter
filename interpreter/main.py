@@ -87,7 +87,7 @@ class AudioFileProcessor(AudioDataProcessor):
 
 
 class SpeechToText:
-    def __init__(self, model_name="base"):
+    def __init__(self, model_name="small"):
         self.model = whisper.load_model(model_name)
 
     def transcribe(self, audio_file_path):
@@ -117,7 +117,7 @@ def openai_tts(text, speech_file_path):
 
 def record_and_transcribe_using_local_model(audio_file_path):
     print("Starting transcription, please speak...")
-    stt = SpeechToText(model_name="base")
+    stt = SpeechToText(model_name="small")
     while True:
         audio_processor = AudioFileProcessor(audio_file_path, sampling_rate=16000)
         audio_processor.record(duration_seconds=3)
@@ -168,7 +168,7 @@ if False:
 if False:
     audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
     local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
-    stt = SpeechToText(model_name="base")  # tiny, base, small, medium, large
+    stt = SpeechToText(model_name="small")  # tiny, base, small, medium, large, turbo
     transcription = stt.transcribe(audio_file_path)
     text = transcription["text"]
     print(text)

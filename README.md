@@ -1,21 +1,18 @@
-# Interpreter: Meeting Assistant
+# Interpreter: Real-Time Meeting Assistant
 
-A real-time transcription and interpretation tool for meetings and conferences using Python and OpenAI's Whisper. This project currently focuses on:
-- Transcribing speech in real time, minimizing information loss from audio chunking.
-- Translating uncommon words for better understanding.
-- Providing key words and summaries for oral speech, assisting second language conversations.
+A real-time audio recording, transcription, and interpretation tool for meetings and live conversations. This project is designed for scenarios where speed and accuracy are critical, such as live interpretation or meeting environments.
 
-**Note:** Whisper model finetuning functionality will be added in a future update.
-
-## Features
-- Real-time audio recording and transcription
-- Integration with OpenAI Whisper API or local Whisper models
-- Keyword extraction and translation for uncommon words
-- Designed for live interpretation and meeting assistance
+## Key Features
+- Real-time audio recording and transcription with continuous listening
+- Speaker identification: print out the words received and indicate who is speaking
+- Option to use either advanced speech recognition APIs (OpenAI Whisper or Google Speech Recognition) or local models for transcription
+- Highlight keywords and uncommon words in the transcript
+- Translate highlighted/uncommon words for better understanding
+- Designed for live interpretation, meeting assistance, and second language conversations
 
 ## Requirements
 - Python 3.8+
-- [openai-whisper](https://github.com/openai/whisper) or compatible library
+- [openai-whisper](https://github.com/openai/whisper)
 - Other dependencies listed in `pyproject.toml`
 
 ## Installation
@@ -33,13 +30,17 @@ A real-time transcription and interpretation tool for meetings and conferences u
   ```sh
   python interpreter/meeting_assistant.py
   ```
+- To compare different speech recognition models:
+  ```sh
+  python interpreter/model_comparison.py
+  ```
 - For testing and development, see scripts in the `interpreter/` directory.
 
 ## Roadmap
-- [x] Split meeting assistant and finetuning functionalities
-- [ ] Implement real-time audio chunking and streaming
-- [ ] Integrate Whisper API/local model
-- [ ] Add keyword extraction and summary display
+- [x] Implement real-time, continuous audio recording and streaming
+- [x] Integrate Whisper API/local model, and evaluate other advanced models
+- [ ] Add speaker identification and display who is talking
+- [ ] Highlight and translate keywords/uncommon words in real time
 - [ ] Build user interface (optional)
 - [ ] Add Whisper model finetuning (future)
 
