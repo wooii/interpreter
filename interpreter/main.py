@@ -8,7 +8,10 @@ from gtts import gTTS
 from translate import Translator
 from interpreter import AudioFileProcessor, data_folder
 import warnings
-warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
+warnings.filterwarnings(
+    action="ignore",
+    message="FP16 is not supported on CPU; using FP32 instead"
+    )
 
 
 class SpeechToText:
@@ -41,15 +44,28 @@ def record_and_transcribe_using_local_model(audio_file_path):
 
 # %% test local models
 if False:
+    # Record audio and save to file
     audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
-    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
+    self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
+    self.record(duration_seconds=5)
+    self.play()
+    self.plot_waveform()
+    self.plot_mel_spectrogram()
+
+    # Transcribe recorded audio using Whisper local model
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
     stt = SpeechToText(model_name="small")  # tiny, base, small, medium, large, turbo
     transcription = stt.transcribe(audio_file_path)
     text = transcription["text"]
     print(text)
+
+    # Translate the transcribed text to Chinese
     translator = TextTranslator(target_language='zh')
     translation = translator.translate(text)
     print(translation)
+
+    # Convert the translated text to speech and play it
+    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
     language = 'zh'
     speech = gTTS(text=translation, lang=language, slow=False)
     speech.save(local_speech_file_path)
