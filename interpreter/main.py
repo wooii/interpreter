@@ -13,6 +13,8 @@ from gtts import gTTS
 from translate import Translator
 from pathlib import Path
 from interpreter import client, data_folder
+import warnings
+warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
 
 class AudioDataProcessor:
