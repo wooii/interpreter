@@ -4,6 +4,10 @@ Created on Wed Jul 17 11:59:45 2024
 """
 
 import whisper
+import queue
+import threading
+import sounddevice as sd
+import soundfile as sf
 from gtts import gTTS
 from translate import Translator
 from interpreter import AudioFileProcessor, data_folder
@@ -31,15 +35,56 @@ class TextTranslator:
         return self.translator.translate(text)
 
 
-def record_and_transcribe_using_local_model(audio_file_path):
-    print("Starting transcription, please speak...")
-    stt = SpeechToText(model_name="small")
-    while True:
-        audio_processor = AudioFileProcessor(audio_file_path, sampling_rate=16000)
-        audio_processor.record(duration_seconds=3)
+class RealTimeTranscribe:
+    def __init__(self, audio_file_path, model_size="small", segment_duration=3, sample_rate=16000):
+        """
+        Initialize the real-time transcriber.
+        """
+        self.audio_file_path = audio_file_path
+        self.model_size = model_size
+        self.segment_duration = segment_duration
+        self.sample_rate = sample_rate
+        self.frame_size = int(self.sample_rate * self.segment_duration)
+        self.audio_queue = queue.Queue()
+        self.recording = False
+        self.stt = whisper.load_model(self.model_size)
+        self.recorder_thread = None
 
-        transcription = stt.transcribe(audio_file_path)
-        print(f"{transcription["text"]}")
+    def audio_recorder(self):
+        """Background thread function to record audio continuously"""
+        while self.recording:
+            audio_data = sd.rec(self.frame_size, samplerate=self.sample_rate, channels=1, dtype='float32')
+            sd.wait()
+            audio_data = audio_data.flatten()
+            self.audio_queue.put(audio_data)
+
+    def start(self):
+        """Start real-time transcription."""
+        print(f"Starting real-time transcription (Model: Whisper {self.model_size})... (Ctrl+C to stop)")
+
+        self.recording = True
+        self.recorder_thread = threading.Thread(target=self.audio_recorder)
+        self.recorder_thread.start()
+        try:
+            while True:
+                audio_data = self.audio_queue.get()
+                temp_file = self.audio_file_path.with_name("temp_segment.wav")
+                sf.write(temp_file, audio_data, self.sample_rate)
+                result = self.stt.transcribe(str(temp_file))
+                if result['text'].strip():
+                    print(f"{result['text']}")
+                temp_file.unlink(missing_ok=True)
+        except KeyboardInterrupt:
+            print("\nStopping...")
+            self.recording = False
+            self.recorder_thread.join()
+
+
+# Test the improved class-based function
+if __name__ == "__main__":
+    audio_file_path = data_folder / "interpreter" / "streaming_audio.wav"
+    self = RealTimeTranscribe(audio_file_path)
+    self.start()
 
 
 # %% test local models
@@ -72,10 +117,3 @@ if False:
     self = AudioFileProcessor(local_speech_file_path, sampling_rate=16000)
     self.play()
     self.plot_waveform()
-
-
-# %% test record_and_transcribe
-if False:
-    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
-    # test local model
-    record_and_transcribe_using_local_model(audio_file_path)
