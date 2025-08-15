@@ -26,15 +26,14 @@ A real-time audio recording, transcription, and interpretation tool for meetings
    ```
 
 ## Usage
-- To run the meeting assistant:
+- To run the real-time interpreter:
   ```sh
-  python interpreter/meeting_assistant.py
+  python interpreter/main.py
   ```
 - To compare different speech recognition models:
   ```sh
   python interpreter/model_comparison.py
   ```
-- For testing and development, see scripts in the `interpreter/` directory.
 
 ## Roadmap
 - [x] Implement real-time, continuous audio recording and streaming

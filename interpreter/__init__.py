@@ -80,17 +80,6 @@ class AudioFileProcessor(AudioDataProcessor):
         plt.tight_layout()
         plt.show()
 
-# %% test AudioProcessor
-if False:
-    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
-    self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
-    self.record(duration_seconds=5)
-    self.play()
-    self.plot_waveform()
-    self.plot_mel_spectrogram()
-    # self.convert_format(output_format='mp3')
-    # self = AudioDataProcessor(audio_data=audio_sample["array"], sampling_rate=16000)
-
 
 # Avoid duplicate OpenMP runtime conflict.
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -115,3 +104,15 @@ if False:
     models_all = client.models.list()
     models_all_id = sorted([i.id for i in models_all])
     openai_api_pricing
+
+
+# %% test AudioProcessor
+if False:
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
+    self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
+    self.record(duration_seconds=5)
+    self.play()
+    self.plot_waveform()
+    self.plot_mel_spectrogram()
+    # self.convert_format(output_format='mp3')
+    # self = AudioDataProcessor(audio_data=audio_sample["array"], sampling_rate=16000)

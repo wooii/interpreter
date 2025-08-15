@@ -88,9 +88,9 @@ class CompareModels:
             print(f"Transcribing with {model_name}...")
             start_time = time.time()
             if language:
-                segments, info = model.transcribe(str(self.audio_file_path), language=language)
+                segments, info = model.transcribe(str(self.audio_file_path), language=language, beam_size=1)
             else:
-                segments, info = model.transcribe(str(self.audio_file_path))
+                segments, info = model.transcribe(str(self.audio_file_path), beam_size=1)
 
             # Join all segments to get the full transcription
             text = "".join([segment.text for segment in segments])

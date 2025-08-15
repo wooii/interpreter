@@ -13,6 +13,8 @@ keywords = ["ai", "interpreter"]
 requires-python = ">=3.10"
 dependencies = [
     "openai-whisper",
+    "openai",
+    "matplotlib",
     "wavio",
     "sounddevice",
     "soundfile",
@@ -20,6 +22,7 @@ dependencies = [
     "translate",
     "evaluate",
     "transformers",
+    "silero-vad",
 ]
 
 
