@@ -81,6 +81,24 @@ class AudioFileProcessor(AudioDataProcessor):
         plt.show()
 
 
+
+class SpeechToText:
+    def __init__(self, model_name="small"):
+        self.model = whisper.load_model(model_name)
+
+    def transcribe(self, audio_file_path):
+        return self.model.transcribe(str(audio_file_path))
+
+
+class TextTranslator:
+
+    def __init__(self, target_language='zh'):
+        self.translator = Translator(to_lang=target_language)
+
+    def translate(self, text):
+        return self.translator.translate(text)
+
+
 # Avoid duplicate OpenMP runtime conflict.
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -116,3 +134,35 @@ if False:
     self.plot_mel_spectrogram()
     # self.convert_format(output_format='mp3')
     # self = AudioDataProcessor(audio_data=audio_sample["array"], sampling_rate=16000)
+
+
+# %% test local models
+if False:
+    # Record audio and save to file
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
+    self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
+    self.record(duration_seconds=5)
+    self.play()
+    self.plot_waveform()
+    self.plot_mel_spectrogram()
+
+    # Transcribe recorded audio using Whisper local model
+    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
+    stt = SpeechToText(model_name="small")  # tiny, base, small, medium, large, turbo
+    transcription = stt.transcribe(audio_file_path)
+    text = transcription["text"]
+    print(text)
+
+    # Translate the transcribed text to Chinese
+    translator = TextTranslator(target_language='zh')
+    translation = translator.translate(text)
+    print(translation)
+
+    # Convert the translated text to speech and play it
+    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
+    language = 'zh'
+    speech = gTTS(text=translation, lang=language, slow=False)
+    speech.save(local_speech_file_path)
+    self = AudioFileProcessor(local_speech_file_path, sampling_rate=16000)
+    self.play()
+    self.plot_waveform()

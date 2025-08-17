@@ -1,8 +1,3 @@
-"""
-Created on Wed Jul 17 11:59:45 2024
-@author: Chenfeng Chen
-"""
-
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -12,33 +7,40 @@ import time
 import warnings
 from pathlib import Path
 import whisper
-from jiwer import wer  # pip install jiwer
+from jiwer import wer
 from interpreter import data_folder
+
 warnings.filterwarnings(
     action="ignore",
     message="FP16 is not supported on CPU; using FP32 instead"
-    )
+)
 
+def color_word_gradient(word, prob):
+    """
+    Map probability (0.0-1.0) to RGB color from red -> yellow -> green.
+    """
+    prob = max(0.0, min(1.0, prob))  # clamp to [0,1]
 
-class SpeechToText:
-    def __init__(self, model_name="small"):
-        self.model = whisper.load_model(model_name)
+    if prob < 0.5:
+        # Red to Yellow
+        r = 255
+        g = int(2 * prob * 255)
+    else:
+        # Yellow to Green
+        r = int((1 - 2 * (prob - 0.5)) * 255)
+        g = 255
+    b = 0
 
-    def transcribe(self, audio_file_path):
-        return self.model.transcribe(str(audio_file_path))
-
-
-class TextTranslator:
-
-    def __init__(self, target_language='zh'):
-        self.translator = Translator(to_lang=target_language)
-
-    def translate(self, text):
-        return self.translator.translate(text)
+    return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
 
 
 class RealTimeTranscribe:
-    def __init__(self, audio_file_path, model_size="small", sample_rate=16000, segment_duration=3):
+    def __init__(self,
+                 audio_file_path,
+                 model_size="small",
+                 sample_rate=16000,
+                 segment_duration=3,
+                 word_prob_threshold=0.9):
         self.audio_file_path = audio_file_path
         self.model_size = model_size
         self.sample_rate = sample_rate
@@ -51,6 +53,8 @@ class RealTimeTranscribe:
         self.transcriber_thread = None
         self.running = False
         self.transcript = []  # Store all transcribed segments
+        self.prev_tail_audio = np.zeros(0, dtype='float32')  # store overlap from previous segment
+        self.word_prob_threshold = word_prob_threshold
 
     def audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -63,26 +67,85 @@ class RealTimeTranscribe:
                 self.q.put(segment.copy())
 
     def transcriber(self):
+        prev_text = ""  # context for Whisper
+        cut_overlap = 0.05  # seconds of overlap between segments
+        start =time.time()
         while True:
+
             segment = self.q.get()
             if segment is None:
                 break
-            temp_file = self.audio_file_path.with_name("temp_segment.wav")
-            sf.write(temp_file, segment, self.sample_rate)
-            result = self.model.transcribe(str(temp_file))
-            temp_file.unlink(missing_ok=True)
-            text = result["text"].strip()
+
+            # Prepend leftover tail audio
+            full_segment = np.concatenate([self.prev_tail_audio, segment])
+
+            if np.sqrt(np.mean(full_segment**2)) < 0.001:  # RMS threshold
+                continue
+
+            # Transcribe
+            result = self.model.transcribe(
+                full_segment.astype(np.float32),
+
+                word_timestamps=True,
+                temperature=0.0,
+                no_speech_threshold=0.9,
+                logprob_threshold=-0.3,
+                condition_on_previous_text=True,
+
+            )
+            #temp_file.unlink(missing_ok=True)
+
+            if not result.get("segments"):
+                continue
+
+            # Flatten all words
+            all_words = []
+            for seg in result["segments"]:
+                if "words" not in seg:
+                    continue
+                # Skip low-confidence / silent segments
+                if seg.get("no_speech_prob", 0) > 0.9 and seg.get("avg_logprob", -1) < -0.3:
+                    continue
+                all_words.extend(seg["words"])
+
+            if not all_words:
+                continue
+
+            # Determine cut point based on last word probability
+            if all_words[-1]["probability"] >= self.word_prob_threshold:
+                last_end_time = all_words[-1]["end"]
+            elif len(all_words) > 1:
+                last_end_time = all_words[-2]["end"]
+                all_words = all_words[:-1]
+            else:
+                last_end_time = all_words[-1]["end"]
+
+            # Convert to sample index with a small overlap
+            cut_sample_idx = int(max(0, last_end_time - cut_overlap) * self.sample_rate)
+            self.prev_tail_audio = full_segment[cut_sample_idx:]
+
+
+
+            # In transcriber(), replace:
+            text = " ".join(color_word_gradient(w["word"].strip(), w["probability"])
+                            for w in all_words if w["word"].strip()).strip()
+
             if text:
-                self.transcript.append(text)
-                print(text)
+                self.transcript.append(" ".join(w["word"].strip() for w in all_words if w["word"].strip()))  # raw
+                end = time.time()
+                print(f"[{end - start:.3f}s] {text}")
 
     def run(self):
-        print(f"Starting real-time transcription (Model: Whisper {self.model_size})... (Ctrl+C to stop)")
+        print(f"Real-time transcribe (Model: Whisper {self.model_size})... (Ctrl+C to stop)")
         self.running = True
         self.transcriber_thread = threading.Thread(target=self.transcriber, daemon=True)
         self.transcriber_thread.start()
         try:
-            with sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='float32', callback=self.audio_callback, blocksize=4000):
+            with sd.InputStream(samplerate=self.sample_rate,
+                                channels=1,
+                                dtype='float32',
+                                callback=self.audio_callback,
+                                blocksize=2000):
                 while self.running:
                     time.sleep(0.1)
         except KeyboardInterrupt:
@@ -104,42 +167,13 @@ class RealTimeTranscribe:
         return error
 
 
-# Test the improved class-based function
 if __name__ == "__main__":
     audio_file_path = data_folder / "interpreter" / "streaming_audio.wav"
-    reference_file = data_folder / "interpreter" / "reference.txt"  # your ground truth transcript
-    self = RealTimeTranscribe(audio_file_path, model_size="small", sample_rate=16000, segment_duration=3)
+    reference_file = data_folder / "interpreter" / "reference.txt"
+    self = RealTimeTranscribe(audio_file_path,
+                              model_size="small",
+                              sample_rate=16000,
+                              segment_duration=3)
     self.run()
+
     self.evaluate(reference_file)
-
-
-# %% test local models
-if False:
-    # Record audio and save to file
-    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
-    self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
-    self.record(duration_seconds=5)
-    self.play()
-    self.plot_waveform()
-    self.plot_mel_spectrogram()
-
-    # Transcribe recorded audio using Whisper local model
-    audio_file_path = data_folder / "interpreter" / "recorded_audio.mp3"
-    stt = SpeechToText(model_name="small")  # tiny, base, small, medium, large, turbo
-    transcription = stt.transcribe(audio_file_path)
-    text = transcription["text"]
-    print(text)
-
-    # Translate the transcribed text to Chinese
-    translator = TextTranslator(target_language='zh')
-    translation = translator.translate(text)
-    print(translation)
-
-    # Convert the translated text to speech and play it
-    local_speech_file_path = data_folder / "interpreter" / "local_speech_audio.mp3"
-    language = 'zh'
-    speech = gTTS(text=translation, lang=language, slow=False)
-    speech.save(local_speech_file_path)
-    self = AudioFileProcessor(local_speech_file_path, sampling_rate=16000)
-    self.play()
-    self.plot_waveform()
