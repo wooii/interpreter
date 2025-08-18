@@ -9,6 +9,18 @@ import soundfile as sf
 from pathlib import Path
 from jiwer import wer, cer
 from interpreter import data_folder
+from transformers import MarianMTModel, MarianTokenizer
+
+
+class OfflineTranslator:
+    def __init__(self, model_name="Helsinki-NLP/opus-mt-en-zh"):
+        self.tokenizer = MarianTokenizer.from_pretrained(model_name)
+        self.model = MarianMTModel.from_pretrained(model_name)
+
+    def translate(self, text):
+        batch = self.tokenizer([text], return_tensors="pt", padding=True)
+        gen = self.model.generate(**batch)
+        return self.tokenizer.decode(gen[0], skip_special_tokens=True)
 
 
 warnings.filterwarnings(
@@ -43,7 +55,8 @@ class RealTimeTranscribe:
                  sample_rate=16000,
                  min_segment_duration=3,
                  blocksize=2000,
-                 word_prob_threshold=0.9):
+                 word_prob_threshold=0.85,
+                 translate_enabled=True):
         self.audio_file_path = audio_file_path
         self.model_size = model_size
         self.sample_rate = sample_rate
@@ -51,6 +64,7 @@ class RealTimeTranscribe:
         self.blocksize = blocksize
         self.segment_duration = min_segment_duration
         self.word_prob_threshold = word_prob_threshold
+        self.translate_enabled = translate_enabled  # store flag
         self.model = whisper.load_model(model_size)
         self.segment_samples = self._duration_to_samples(self.segment_duration)
         self.audio_buffer = np.zeros(0, dtype='float32')
@@ -62,6 +76,7 @@ class RealTimeTranscribe:
         self.prev_tail_audio = np.zeros(0, dtype='float32')
         self.full_recording = np.zeros(0, dtype='float32')
         self.segments_processed = 0
+        self.translator = OfflineTranslator()
 
     def _duration_to_samples(self, duration):
         samples = int(duration * self.sample_rate)
@@ -72,7 +87,7 @@ class RealTimeTranscribe:
         return samples
 
     def transcriber(self):
-        cut_overlap = 0.05
+        cut_overlap = 0.1
         start = time.time()
         while True:
             segment = self.q.get()
@@ -131,9 +146,19 @@ class RealTimeTranscribe:
             text = " ".join(color_word_gradient(w["word"].strip(), w["probability"])
                             for w in all_words if w["word"].strip()).strip()
             if text:
-                self.transcript.append(" ".join(w["word"].strip() for w in all_words if w["word"].strip()))
+                # Save raw English transcript
+                sentence = " ".join(w["word"].strip() for w in all_words if w["word"].strip())
+                self.transcript.append(sentence)
+
+                # Offline translation
+                translated = self.translator.translate(sentence)
+
                 end = time.time()
-                print(f"[{end - start:.3f}s] {text}")
+                if self.translate_enabled:  # <-- conditional
+                    translated = self.translator.translate(sentence)
+                    print(f"[{end - start:.3f}s] {text} → {translated}")
+                else:
+                    print(f"[{end - start:.3f}s] {text}")
 
     def audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -159,7 +184,7 @@ class RealTimeTranscribe:
                                 channels=1,
                                 dtype='float32',
                                 callback=self.audio_callback,
-                                blocksize=2000):
+                                blocksize=self.blocksize):
                 while self.running:
                     time.sleep(0.1)
         except KeyboardInterrupt:
@@ -204,9 +229,10 @@ class RealTimeTranscribe:
 
 if __name__ == "__main__":
     self = RealTimeTranscribe(audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
-                              model_size="tiny",
+                              model_size="small",
                               sample_rate=16000,
-                              min_segment_duration=3)
+                              min_segment_duration=3,
+                              translate_enabled=True)
     self.run()
 
     self.evaluate()
