@@ -2,17 +2,24 @@ import whisper
 import threading
 import queue
 import time
+import datetime
+import webrtcvad
+import collections
 import warnings
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
-from pathlib import Path
+import noisereduce as nr
 from jiwer import wer, cer
 from interpreter import data_folder
 from transformers import MarianMTModel, MarianTokenizer
-import webrtcvad
-import collections
-import datetime
+
+
+warnings.filterwarnings(
+    action="ignore",
+    message="FP16 is not supported on CPU; using FP32 instead"
+)
+
 
 class OfflineTranslator:
     def __init__(self, model_name="Helsinki-NLP/opus-mt-en-zh"):
@@ -23,12 +30,6 @@ class OfflineTranslator:
         batch = self.tokenizer([text], return_tensors="pt", padding=True)
         gen = self.model.generate(**batch)
         return self.tokenizer.decode(gen[0], skip_special_tokens=True)
-
-
-warnings.filterwarnings(
-    action="ignore",
-    message="FP16 is not supported on CPU; using FP32 instead"
-)
 
 
 def color_word_gradient(word, prob):
@@ -51,6 +52,10 @@ def color_word_gradient(word, prob):
 
 
 class RealTimeTranscribe:
+    """
+    Real-time transcription with optional audio normalization and parameter tweaks for improved playback transcription.
+    For degraded audio (e.g., playback to mic), try vad_aggressiveness=2 or 3.
+    """
     def __init__(self,
                  audio_file_path=None,
                  model_size="small",
@@ -58,7 +63,7 @@ class RealTimeTranscribe:
                  blocksize=1024,
                  word_prob_threshold=0.85,
                  translate_enabled=True,
-                 vad_aggressiveness=2):
+                 vad_aggressiveness=1):
         self.audio_file_path = audio_file_path
         self.model_size = model_size
         self.sample_rate = sample_rate
@@ -69,7 +74,9 @@ class RealTimeTranscribe:
 
         # Initialize Whisper model
         self.model = whisper.load_model(model_size)
-        self.translator = OfflineTranslator()
+
+        if self.translate_enabled:
+            self.translator = OfflineTranslator()
 
         # Audio processing parameters
         self.frame_duration_ms = 30  # 30ms frames as required by VAD
@@ -171,14 +178,22 @@ class RealTimeTranscribe:
             if np.sqrt(np.mean(full_segment**2)) < 0.001:
                 continue
 
-            # Transcribe with Whisper
+            # Normalize audio to [-1, 1] for consistent loudness
+            max_val = np.max(np.abs(full_segment)) + 1e-8
+            full_segment = full_segment / max_val
+
+            # Optional: apply noise reduction here (e.g., with noisereduce or scipy)
+
+            full_segment = nr.reduce_noise(y=full_segment, sr=self.sample_rate)
+
+            # Transcribe with Whisper (tweaked params for degraded audio)
             t0 = time.time()
             result = self.model.transcribe(
                 audio=full_segment.astype(np.float32),
                 word_timestamps=True,
                 temperature=0.0,
-                no_speech_threshold=0.6,
-                logprob_threshold=-0.5,
+                no_speech_threshold=0.5,  # less likely to skip quiet speech
+                logprob_threshold=-0.3,   # accept more uncertain words
                 condition_on_previous_text=True,
                 fp16=False  # Explicitly disable FP16 for CPU compatibility
             )
@@ -232,7 +247,7 @@ class RealTimeTranscribe:
 
     def run(self):
         """Start the real-time transcription process"""
-        print(f"Improved real-time transcribe (Model: Whisper {self.model_size})... (Ctrl+C to stop)")
+        print(f"Real-time transcribe (Model: Whisper {self.model_size})... (Ctrl+C to stop)")
         self.running = True
         self.start_time = time.time()
 
@@ -291,7 +306,6 @@ class RealTimeTranscribe:
 
 
 if __name__ == "__main__":
-    # Use the improved real-time transcription
     self = RealTimeTranscribe(audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
                               model_size="small",
                               translate_enabled=True)
