@@ -1,19 +1,21 @@
-import numpy as np
-import sounddevice as sd
-import soundfile as sf
+import whisper
 import threading
 import queue
 import time
 import warnings
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
 from pathlib import Path
-import whisper
-from jiwer import wer
+from jiwer import wer, cer
 from interpreter import data_folder
+
 
 warnings.filterwarnings(
     action="ignore",
     message="FP16 is not supported on CPU; using FP32 instead"
 )
+
 
 def color_word_gradient(word, prob):
     """
@@ -36,7 +38,7 @@ def color_word_gradient(word, prob):
 
 class RealTimeTranscribe:
     def __init__(self,
-                 audio_file_path,
+                 audio_file_path=None,
                  model_size="small",
                  sample_rate=16000,
                  segment_duration=3,
@@ -45,6 +47,7 @@ class RealTimeTranscribe:
         self.model_size = model_size
         self.sample_rate = sample_rate
         self.segment_duration = segment_duration
+        self.word_prob_threshold = word_prob_threshold
         self.model = whisper.load_model(model_size)
         self.segment_samples = int(sample_rate * segment_duration)
         self.audio_buffer = np.zeros(0, dtype='float32')
@@ -54,24 +57,26 @@ class RealTimeTranscribe:
         self.running = False
         self.transcript = []  # Store all transcribed segments
         self.prev_tail_audio = np.zeros(0, dtype='float32')  # store overlap from previous segment
-        self.word_prob_threshold = word_prob_threshold
+        self.full_recording = np.zeros(0, dtype='float32')
 
     def audio_callback(self, indata, frames, time_info, status):
         if status:
             print(status)
         with self.lock:
-            self.audio_buffer = np.append(self.audio_buffer, indata.flatten())
+            audio_data = indata.flatten()
+            # Save all recorded audio if path is provided
+            if self.audio_file_path:
+                self.full_recording = np.append(self.full_recording, audio_data)
+            self.audio_buffer = np.append(self.audio_buffer, audio_data)
             while len(self.audio_buffer) >= self.segment_samples:
                 segment = self.audio_buffer[:self.segment_samples]
                 self.audio_buffer = self.audio_buffer[self.segment_samples:]
                 self.q.put(segment.copy())
 
     def transcriber(self):
-        prev_text = ""  # context for Whisper
         cut_overlap = 0.05  # seconds of overlap between segments
         start =time.time()
         while True:
-
             segment = self.q.get()
             if segment is None:
                 break
@@ -84,16 +89,13 @@ class RealTimeTranscribe:
 
             # Transcribe
             result = self.model.transcribe(
-                full_segment.astype(np.float32),
-
+                audio=full_segment.astype(np.float32),
                 word_timestamps=True,
                 temperature=0.0,
                 no_speech_threshold=0.9,
                 logprob_threshold=-0.3,
                 condition_on_previous_text=True,
-
             )
-            #temp_file.unlink(missing_ok=True)
 
             if not result.get("segments"):
                 continue
@@ -124,14 +126,11 @@ class RealTimeTranscribe:
             cut_sample_idx = int(max(0, last_end_time - cut_overlap) * self.sample_rate)
             self.prev_tail_audio = full_segment[cut_sample_idx:]
 
-
-
-            # In transcriber(), replace:
             text = " ".join(color_word_gradient(w["word"].strip(), w["probability"])
                             for w in all_words if w["word"].strip()).strip()
 
             if text:
-                self.transcript.append(" ".join(w["word"].strip() for w in all_words if w["word"].strip()))  # raw
+                self.transcript.append(" ".join(w["word"].strip() for w in all_words if w["word"].strip()))
                 end = time.time()
                 print(f"[{end - start:.3f}s] {text}")
 
@@ -157,23 +156,44 @@ class RealTimeTranscribe:
         self.q.put(None)
         if self.transcriber_thread is not None:
             self.transcriber_thread.join()
+        # Save full recording if path was provided
+        if self.audio_file_path and len(self.full_recording) > 0:
+            sf.write(self.audio_file_path, self.full_recording, self.sample_rate)
+            print(f"Audio saved to {self.audio_file_path}")
 
-    def evaluate(self, reference_file: Path):
-        with open(reference_file, "r", encoding="utf-8") as f:
-            reference_text = f.read().strip()
-        hypothesis_text = " ".join(self.transcript)
-        error = wer(reference_text, hypothesis_text)
-        print(f"Word Error Rate (WER): {error:.2%}")
-        return error
+
+
+    def evaluate(self):
+        """Transcribe audio using Whisper model and compare with real-time transcript."""
+        if self.audio_file_path is None:
+            print("No audio_file_path provided for evaluation.")
+            return None
+
+        # Load and transcribe reference audio
+        result = self.model.transcribe(str(self.audio_file_path))
+        self.reference_transcript = result["text"].strip()
+
+        # Get hypothesis text from real-time transcription
+        self.realtime_transcript = " ".join(self.transcript).strip()
+
+        # Calculate WER and CER
+        wer_error = wer(self.reference_transcript, self.realtime_transcript)
+        cer_error = cer(self.reference_transcript, self.realtime_transcript)
+
+        # Display results
+        print(f"Word Error Rate (WER): {wer_error:.2%}")
+        print(f"Character Error Rate (CER): {cer_error:.2%}")
+        print(f"Reference: {self.reference_transcript}")
+        print(f"Realtime Transcript: {self.realtime_transcript}")
+
+        return {"WER": wer_error, "CER": cer_error}
 
 
 if __name__ == "__main__":
-    audio_file_path = data_folder / "interpreter" / "streaming_audio.wav"
-    reference_file = data_folder / "interpreter" / "reference.txt"
-    self = RealTimeTranscribe(audio_file_path,
+    self = RealTimeTranscribe(audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
                               model_size="small",
                               sample_rate=16000,
                               segment_duration=3)
     self.run()
 
-    self.evaluate(reference_file)
+    self.evaluate()
