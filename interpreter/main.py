@@ -32,25 +32,6 @@ class OfflineTranslator:
         return self.tokenizer.decode(gen[0], skip_special_tokens=True)
 
 
-def color_word_gradient(word, prob):
-    """
-    Map probability (0.0-1.0) to RGB color from red -> yellow -> green.
-    """
-    prob = max(0.0, min(1.0, prob))  # clamp to [0,1]
-
-    if prob < 0.5:
-        # Red to Yellow
-        r = 255
-        g = int(2 * prob * 255)
-    else:
-        # Yellow to Green
-        r = int((1 - 2 * (prob - 0.5)) * 255)
-        g = 255
-    b = 0
-
-    return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
-
-
 class RealTimeTranscribe:
     """
     Real-time transcription with optional audio normalization and parameter tweaks for improved playback transcription.
@@ -118,6 +99,24 @@ class RealTimeTranscribe:
             return False
         return self.vad.is_speech(self.float_to_pcm16(frame), self.sample_rate)
 
+    def color_word(self, word, prob):
+        """
+        Map probability (0.0-1.0) to RGB color from red -> yellow -> green.
+        """
+        prob = max(0.0, min(1.0, prob))  # clamp to [0,1]
+
+        if prob < 0.5:
+            # Red to Yellow
+            r = 255
+            g = int(2 * prob * 255)
+        else:
+            # Yellow to Green
+            r = int((1 - 2 * (prob - 0.5)) * 255)
+            g = 255
+        b = 0
+
+        return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
+
     def audio_callback(self, indata, frames, time_info, status):
         """Audio callback function for sounddevice"""
         if status:
@@ -164,7 +163,7 @@ class RealTimeTranscribe:
                         self.recorded_frames = []
                         self.ring_buffer.clear()
 
-    def transcriber(self):
+    def transcribe(self):
         """Transcription thread that processes audio segments"""
         while True:
             segment = self.q.get()
@@ -186,7 +185,7 @@ class RealTimeTranscribe:
 
             full_segment = nr.reduce_noise(y=full_segment, sr=self.sample_rate)
 
-            # Transcribe with Whisper (tweaked params for degraded audio)
+            # transcribe with Whisper (tweaked params for degraded audio)
             t0 = time.time()
             result = self.model.transcribe(
                 audio=full_segment.astype(np.float32),
@@ -221,7 +220,7 @@ class RealTimeTranscribe:
                 self.transcript.append(sentence)
 
                 # Create colored text for display
-                text = " ".join(color_word_gradient(w["word"].strip(), w["probability"])
+                text = " ".join(self.color_word(w["word"].strip(), w["probability"])
                                 for w in all_words if w["word"].strip()).strip()
 
                 if text:
@@ -252,7 +251,7 @@ class RealTimeTranscribe:
         self.start_time = time.time()
 
         # Start transcription thread
-        self.transcriber_thread = threading.Thread(target=self.transcriber, daemon=True)
+        self.transcriber_thread = threading.Thread(target=self.transcribe, daemon=True)
         self.transcriber_thread.start()
 
         try:
@@ -280,7 +279,7 @@ class RealTimeTranscribe:
             print(f"Audio saved to {self.audio_file_path}")
 
     def evaluate(self):
-        """Transcribe audio using Whisper model and compare with real-time transcript."""
+        """Transcribe saved audio using Whisper model and compare with real-time transcript."""
         if self.audio_file_path is None:
             print("No audio_file_path provided for evaluation.")
             return None
@@ -289,7 +288,7 @@ class RealTimeTranscribe:
         result = self.model.transcribe(str(self.audio_file_path))
         self.reference_transcript = result["text"].strip()
 
-        # Get hypothesis text from real-time transcription
+        # Get transcription text from real-time transcription
         self.realtime_transcript = " ".join(self.transcript).strip()
 
         # Calculate WER and CER
