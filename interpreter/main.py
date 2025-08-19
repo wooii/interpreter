@@ -45,6 +45,7 @@ class RealTimeTranscribe:
                  word_prob_threshold=0.85,
                  translate_enabled=True,
                  vad_aggressiveness=1):
+        # Configuration parameters
         self.audio_file_path = audio_file_path
         self.model_size = model_size
         self.sample_rate = sample_rate
@@ -60,14 +61,23 @@ class RealTimeTranscribe:
             self.translator = OfflineTranslator()
 
         # Audio processing parameters
+        self._initialize_audio_params()
+
+        # Storage and state management
+        self._initialize_state()
+
+    def _initialize_audio_params(self):
+        """Initialize audio processing parameters."""
         self.frame_duration_ms = 30  # 30ms frames as required by VAD
-        self.frame_size = int(sample_rate * (self.frame_duration_ms / 1000.0))
-        self.vad = webrtcvad.Vad(vad_aggressiveness)
+        self.frame_size = int(self.sample_rate * (self.frame_duration_ms / 1000.0))
+        self.vad = webrtcvad.Vad(self.vad_aggressiveness)
 
         # Rolling window parameters for speech detection
         self.padding_duration_ms = 300  # Duration of padding for silence detection
         self.padding_frames = int(self.padding_duration_ms / self.frame_duration_ms)
 
+    def _initialize_state(self):
+        """Initialize state management variables."""
         # Ring buffer to store audio frames
         self.ring_buffer = collections.deque(maxlen=self.padding_frames)
         self.triggered = False  # State to track if we're in a speech segment
@@ -89,6 +99,7 @@ class RealTimeTranscribe:
         # Timing
         self.start_time = time.time()
 
+    # Audio conversion methods
     def float_to_pcm16(self, audio):
         """Convert float32 audio to int16 PCM format required by VAD"""
         return (audio * 32767).astype(np.int16).tobytes()
@@ -99,6 +110,7 @@ class RealTimeTranscribe:
             return False
         return self.vad.is_speech(self.float_to_pcm16(frame), self.sample_rate)
 
+    # Text formatting and display methods
     def color_word(self, word, prob):
         """
         Map probability (0.0-1.0) to RGB color from red -> yellow -> green.
@@ -117,6 +129,7 @@ class RealTimeTranscribe:
 
         return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
 
+    # Audio processing methods
     def audio_callback(self, indata, frames, time_info, status):
         """Audio callback function for sounddevice"""
         if status:
@@ -163,6 +176,74 @@ class RealTimeTranscribe:
                         self.recorded_frames = []
                         self.ring_buffer.clear()
 
+    def _process_audio_segment(self, full_segment):
+        """Process an audio segment with noise reduction and normalization."""
+        # Skip if too quiet (likely just noise)
+        if np.sqrt(np.mean(full_segment**2)) < 0.001:
+            return None
+
+        # Normalize audio to [-1, 1] for consistent loudness
+        max_val = np.max(np.abs(full_segment)) + 1e-8
+        full_segment = full_segment / max_val
+
+        # Apply noise reduction
+        full_segment = nr.reduce_noise(y=full_segment, sr=self.sample_rate)
+        return full_segment
+
+    def _extract_words(self, result):
+        """Extract words from transcription result with filtering."""
+        if not result.get("segments"):
+            return []
+
+        all_words = []
+        for seg in result["segments"]:
+            if "words" not in seg:
+                continue
+            if seg.get("no_speech_prob", 0) > 0.9 and seg.get("avg_logprob", -1) < -0.5:
+                continue
+            all_words.extend(seg["words"])
+
+        return all_words
+
+    def _format_transcription_output(self, all_words):
+        """Format the transcription output for display."""
+        if not all_words:
+            return None, None
+
+        # Save raw English transcript
+        sentence = " ".join(w["word"].strip() for w in all_words if w["word"].strip())
+
+        # Create colored text for display
+        text = " ".join(self.color_word(w["word"].strip(), w["probability"])
+                        for w in all_words if w["word"].strip()).strip()
+
+        return sentence, text
+
+    def _display_transcription(self, text, sentence):
+        """Display the transcription with timestamp and optional translation."""
+        if text:
+            end = time.time()
+            elapsed = datetime.timedelta(seconds=end - self.start_time)
+            # Convert timedelta to datetime object (relative to 0)
+            dt = (datetime.datetime.min + elapsed)
+            time_str = dt.strftime("%M:%S.%f")[:-3]  # MM:SS.mmm
+
+            if self.translate_enabled:
+                translated = self.translator.translate(sentence)
+                print(f"[{time_str}] {text} → {translated}")
+            else:
+                print(f"[{time_str}] {text}")
+
+    def _update_audio_context(self, full_segment):
+        """Update the audio context with overlap for next transcription."""
+        # Keep a small overlap for context in next transcription
+        # Keep last 0.2 seconds for context
+        overlap_samples = int(0.2 * self.sample_rate)
+        if len(full_segment) > overlap_samples:
+            self.prev_tail_audio = full_segment[-overlap_samples:]
+        else:
+            self.prev_tail_audio = full_segment
+
     def transcribe(self):
         """Transcription thread that processes audio segments"""
         while True:
@@ -173,22 +254,14 @@ class RealTimeTranscribe:
             # Combine with previous audio tail
             full_segment = np.concatenate([self.prev_tail_audio, segment])
 
-            # Skip if too quiet (likely just noise)
-            if np.sqrt(np.mean(full_segment**2)) < 0.001:
+            # Process audio segment
+            processed_segment = self._process_audio_segment(full_segment)
+            if processed_segment is None:
                 continue
 
-            # Normalize audio to [-1, 1] for consistent loudness
-            max_val = np.max(np.abs(full_segment)) + 1e-8
-            full_segment = full_segment / max_val
-
-            # Optional: apply noise reduction here (e.g., with noisereduce or scipy)
-
-            full_segment = nr.reduce_noise(y=full_segment, sr=self.sample_rate)
-
-            # transcribe with Whisper (tweaked params for degraded audio)
-            t0 = time.time()
+            # Transcribe with Whisper (tweaked params for degraded audio)
             result = self.model.transcribe(
-                audio=full_segment.astype(np.float32),
+                audio=processed_segment.astype(np.float32),
                 word_timestamps=True,
                 temperature=0.0,
                 no_speech_threshold=0.5,  # less likely to skip quiet speech
@@ -196,54 +269,20 @@ class RealTimeTranscribe:
                 condition_on_previous_text=True,
                 fp16=False  # Explicitly disable FP16 for CPU compatibility
             )
-            t1 = time.time()
 
-            # Process transcription results
-            if not result.get("segments"):
-                continue
-
-            all_words = []
-            for seg in result["segments"]:
-                if "words" not in seg:
-                    continue
-                if seg.get("no_speech_prob", 0) > 0.9 and seg.get("avg_logprob", -1) < -0.5:
-                    continue
-                all_words.extend(seg["words"])
-
+            # Extract words from result
+            all_words = self._extract_words(result)
             if not all_words:
                 continue
 
-            # Determine where to cut the audio for overlap
-            if len(all_words) > 0:
-                # Save raw English transcript
-                sentence = " ".join(w["word"].strip() for w in all_words if w["word"].strip())
+            # Format and display transcription
+            sentence, text = self._format_transcription_output(all_words)
+            if sentence and text:
                 self.transcript.append(sentence)
+                self._display_transcription(text, sentence)
+                self._update_audio_context(processed_segment)
 
-                # Create colored text for display
-                text = " ".join(self.color_word(w["word"].strip(), w["probability"])
-                                for w in all_words if w["word"].strip()).strip()
-
-                if text:
-                    end = time.time()
-                    elapsed = datetime.timedelta(seconds=end - self.start_time)
-                    # Convert timedelta to datetime object (relative to 0)
-                    dt = (datetime.datetime.min + elapsed)
-                    time_str = dt.strftime("%M:%S.%f")[:-3]  # MM:SS.mmm
-
-                    if self.translate_enabled:
-                        translated = self.translator.translate(sentence)
-                        print(f"[{time_str}] {text} → {translated}")
-                    else:
-                        print(f"[{time_str}] {text}")
-
-                    # Keep a small overlap for context in next transcription
-                    # Keep last 0.2 seconds for context
-                    overlap_samples = int(0.2 * self.sample_rate)
-                    if len(full_segment) > overlap_samples:
-                        self.prev_tail_audio = full_segment[-overlap_samples:]
-                    else:
-                        self.prev_tail_audio = full_segment
-
+    # Control methods
     def run(self):
         """Start the real-time transcription process"""
         print(f"Real-time transcribe (Model: Whisper {self.model_size})... (Ctrl+C to stop)")
