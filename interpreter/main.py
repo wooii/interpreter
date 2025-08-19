@@ -11,8 +11,8 @@ import sounddevice as sd
 import soundfile as sf
 import noisereduce as nr
 from jiwer import wer, cer
-from interpreter import data_folder
 from transformers import MarianMTModel, MarianTokenizer
+from interpreter import data_folder
 
 
 warnings.filterwarnings(
@@ -24,99 +24,129 @@ warnings.filterwarnings(
 class OfflineTranslator:
     def __init__(self, model_name="Helsinki-NLP/opus-mt-en-zh"):
         self.tokenizer = MarianTokenizer.from_pretrained(model_name)
-        self.model = MarianMTModel.from_pretrained(model_name)
+        self.translator = MarianMTModel.from_pretrained(model_name)
 
     def translate(self, text):
         batch = self.tokenizer([text], return_tensors="pt", padding=True)
-        gen = self.model.generate(**batch)
+        gen = self.translator.generate(**batch)
         return self.tokenizer.decode(gen[0], skip_special_tokens=True)
 
 
 class RealTimeTranscribe:
     """
-    Real-time transcription with optional audio normalization and parameter tweaks for improved playback transcription.
+    Real-time transcription and translation.
     For degraded audio (e.g., playback to mic), try vad_aggressiveness=2 or 3.
     """
     def __init__(self,
                  audio_file_path=None,
                  model_size="small",
-                 sample_rate=16000,
-                 blocksize=1024,
-                 word_prob_threshold=0.85,
                  translate_enabled=True,
+                 word_prob_threshold=0.85,
                  vad_aggressiveness=1):
-        # Configuration parameters
         self.audio_file_path = audio_file_path
         self.model_size = model_size
-        self.sample_rate = sample_rate
-        self.blocksize = blocksize
-        self.word_prob_threshold = word_prob_threshold
         self.translate_enabled = translate_enabled
+        self.word_prob_threshold = word_prob_threshold
         self.vad_aggressiveness = vad_aggressiveness
+        self._initialize_models()
+        self._initialize_audio_params()
+        self._initialize_state()
 
-        # Initialize Whisper model
-        self.model = whisper.load_model(model_size)
-
+    def _initialize_models(self):
+        """Initialize Whisper model and optional translator."""
+        self.stt_model = whisper.load_model(self.model_size)
         if self.translate_enabled:
             self.translator = OfflineTranslator()
 
-        # Audio processing parameters
-        self._initialize_audio_params()
-
-        # Storage and state management
-        self._initialize_state()
-
     def _initialize_audio_params(self):
         """Initialize audio processing parameters."""
-        self.frame_duration_ms = 30  # 30ms frames as required by VAD
+        self.sample_rate = 16000
+        self.frame_duration_ms = 20  # 20ms frames as required by VAD
         self.frame_size = int(self.sample_rate * (self.frame_duration_ms / 1000.0))
         self.vad = webrtcvad.Vad(self.vad_aggressiveness)
-
-        # Rolling window parameters for speech detection
-        self.padding_duration_ms = 300  # Duration of padding for silence detection
-        self.padding_frames = int(self.padding_duration_ms / self.frame_duration_ms)
 
     def _initialize_state(self):
         """Initialize state management variables."""
         # Ring buffer to store audio frames
-        self.ring_buffer = collections.deque(maxlen=self.padding_frames)
+        self.ring_buffer = collections.deque(maxlen=10)
         self.triggered = False  # State to track if we're in a speech segment
 
         # Storage for recorded frames and previous audio
         self.recorded_frames = []
         self.prev_tail_audio = np.zeros(0, dtype='float32')
 
+        # Queues for threading
+        self.q_raw = queue.Queue()  # raw frames from callback
+        self.q = queue.Queue()  # speech segments for transcription
+
         # Threading and synchronization
         self.lock = threading.Lock()
-        self.q = queue.Queue()
         self.transcriber_thread = None
+        self.vad_thread = None
         self.running = False
 
         # Transcript storage
         self.transcript = []
-        self.full_recording = np.zeros(0, dtype='float32')
+        self.full_recording_list = []  # more efficient than np.append
 
         # Timing
         self.start_time = time.time()
 
-    # Audio conversion methods
-    def float_to_pcm16(self, audio):
+    def _float_to_pcm16(self, audio):
         """Convert float32 audio to int16 PCM format required by VAD"""
         return (audio * 32767).astype(np.int16).tobytes()
 
-    def is_speech(self, frame):
+    def _is_speech(self, frame):
         """Check if a frame contains speech using VAD"""
         if len(frame) != self.frame_size:
             return False
-        return self.vad.is_speech(self.float_to_pcm16(frame), self.sample_rate)
+        return self.vad.is_speech(self._float_to_pcm16(frame), self.sample_rate)
 
-    # Text formatting and display methods
-    def color_word(self, word, prob):
-        """
-        Map probability (0.0-1.0) to RGB color from red -> yellow -> green.
-        """
+    def _audio_callback(self, indata, frames, time_info, status):
+        """Minimal audio callback: just slice frames and enqueue."""
+        if status:
+            print(status)
+        audio_data = indata.flatten()
+
+        # Collect audio if saving
+        if self.audio_file_path:
+            self.full_recording_list.append(audio_data)
+
+        # Slice into fixed-size frames and enqueue
+        while len(audio_data) >= self.frame_size:
+            frame = audio_data[:self.frame_size]
+            audio_data = audio_data[self.frame_size:]
+            self.q_raw.put(frame)
+
+    def _vad_worker(self):
+        """Background worker: process frames with VAD state machine."""
+        while self.running:
+            frame = self.q_raw.get()
+            if frame is None:
+                break
+            is_speech = self._is_speech(frame)
+            self.ring_buffer.append((frame, is_speech))
+
+            if not self.triggered:
+                if sum(s for _, s in self.ring_buffer) > 0.5 * self.ring_buffer.maxlen:
+                    self.triggered = True
+                    for f, _ in self.ring_buffer:
+                        self.recorded_frames.append(f)
+                    self.ring_buffer.clear()
+            else:
+                self.recorded_frames.append(frame)
+
+                if sum(1 for _, s in self.ring_buffer if not s) > 0.9 * self.ring_buffer.maxlen:
+                    if self.recorded_frames:
+                        segment = np.concatenate(self.recorded_frames)
+                        self.q.put(segment.copy())
+                    self.triggered = False
+                    self.recorded_frames.clear()
+                    self.ring_buffer.clear()
+
+    def _color_word(self, word, prob):
+        """Map probability (0.0-1.0) to RGB color from red -> yellow -> green."""
         prob = max(0.0, min(1.0, prob))  # clamp to [0,1]
-
         if prob < 0.5:
             # Red to Yellow
             r = 255
@@ -126,55 +156,8 @@ class RealTimeTranscribe:
             r = int((1 - 2 * (prob - 0.5)) * 255)
             g = 255
         b = 0
-
         return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
 
-    # Audio processing methods
-    def audio_callback(self, indata, frames, time_info, status):
-        """Audio callback function for sounddevice"""
-        if status:
-            print(status)
-        with self.lock:
-            audio_data = indata.flatten()
-            # Save all recorded audio if path is provided
-            if self.audio_file_path:
-                self.full_recording = np.append(self.full_recording, audio_data)
-
-            # Process audio in VAD frames
-            while len(audio_data) >= self.frame_size:
-                frame = audio_data[:self.frame_size]
-                audio_data = audio_data[self.frame_size:]
-
-                is_speech = self.is_speech(frame)
-
-                # State machine for speech detection
-                if not self.triggered:
-                    self.ring_buffer.append((frame, is_speech))
-                    num_voiced = len([f for f, speech in self.ring_buffer if speech])
-
-                    # If we're in a speech segment
-                    if num_voiced > 0.5 * self.ring_buffer.maxlen:
-                        self.triggered = True
-                        # Add all buffered frames to recorded frames
-                        for f, s in self.ring_buffer:
-                            self.recorded_frames.append(f)
-                        self.ring_buffer.clear()
-                else:
-                    # We're in a speech segment, just add the frame
-                    self.recorded_frames.append(frame)
-                    self.ring_buffer.append((frame, is_speech))
-                    num_unvoiced = len([f for f, speech in self.ring_buffer if not speech])
-
-                    # End of speech segment
-                    if num_unvoiced > 0.9 * self.ring_buffer.maxlen:
-                        # Put the recorded segment in the queue for transcription
-                        if len(self.recorded_frames) > 0:
-                            segment = np.concatenate(self.recorded_frames)
-                            self.q.put(segment.copy())
-
-                        self.triggered = False
-                        self.recorded_frames = []
-                        self.ring_buffer.clear()
 
     def _process_audio_segment(self, full_segment):
         """Process an audio segment with noise reduction and normalization."""
@@ -205,23 +188,22 @@ class RealTimeTranscribe:
 
         return all_words
 
-    def _format_transcription_output(self, all_words):
-        """Format the transcription output for display."""
+    def _format_and_display_transcription(self, all_words):
+        """Format the transcription output and display it."""
         if not all_words:
-            return None, None
+            return
 
         # Save raw English transcript
         sentence = " ".join(w["word"].strip() for w in all_words if w["word"].strip())
 
         # Create colored text for display
-        text = " ".join(self.color_word(w["word"].strip(), w["probability"])
+        text = " ".join(self._color_word(w["word"].strip(), w["probability"])
                         for w in all_words if w["word"].strip()).strip()
 
-        return sentence, text
-
-    def _display_transcription(self, text, sentence):
-        """Display the transcription with timestamp and optional translation."""
+        # Display the transcription with timestamp and optional translation
         if text:
+            self.transcript.append(sentence)
+
             end = time.time()
             elapsed = datetime.timedelta(seconds=end - self.start_time)
             # Convert timedelta to datetime object (relative to 0)
@@ -234,17 +216,25 @@ class RealTimeTranscribe:
             else:
                 print(f"[{time_str}] {text}")
 
-    def _update_audio_context(self, full_segment):
-        """Update the audio context with overlap for next transcription."""
-        # Keep a small overlap for context in next transcription
-        # Keep last 0.2 seconds for context
-        overlap_samples = int(0.2 * self.sample_rate)
-        if len(full_segment) > overlap_samples:
-            self.prev_tail_audio = full_segment[-overlap_samples:]
-        else:
-            self.prev_tail_audio = full_segment
+    def _update_audio_context(self, segment, all_words, max_overlap_sec=0.5):
+        """Keep the tail of the last word as overlap for next transcription."""
+        if not all_words:
+            self.prev_tail_audio = np.zeros(0, dtype='float32')
+            return
 
-    def transcribe(self):
+        # Get last word's end timestamp
+        last_word = all_words[-1]
+        end_time = last_word.get("end", None)  # in seconds
+        if end_time is None:
+            self.prev_tail_audio = np.zeros(0, dtype='float32')
+            return
+        start_sample = int(end_time * self.sample_rate)
+        # Convert to sample index
+        max_overlap_samples = int(max_overlap_sec * self.sample_rate)
+        start_sample = max(len(segment) - max_overlap_samples, start_sample)
+        self.prev_tail_audio = segment[start_sample:]
+
+    def _transcribe(self):
         """Transcription thread that processes audio segments"""
         while True:
             segment = self.q.get()
@@ -260,7 +250,7 @@ class RealTimeTranscribe:
                 continue
 
             # Transcribe with Whisper (tweaked params for degraded audio)
-            result = self.model.transcribe(
+            result = self.stt_model.transcribe(
                 audio=processed_segment.astype(np.float32),
                 word_timestamps=True,
                 temperature=0.0,
@@ -275,77 +265,71 @@ class RealTimeTranscribe:
             if not all_words:
                 continue
 
-            # Format and display transcription
-            sentence, text = self._format_transcription_output(all_words)
-            if sentence and text:
-                self.transcript.append(sentence)
-                self._display_transcription(text, sentence)
-                self._update_audio_context(processed_segment)
+            # Format and display transcription with audio context update
+            self._format_and_display_transcription(all_words)
+            if all_words and segment is not None:
+                self._update_audio_context(segment, all_words)
 
-    # Control methods
+    def _stop(self):
+        """Stop the transcription process"""
+        self.running = False
+        self.q.put(None)
+        self.q_raw.put(None)
+        if self.transcriber_thread is not None:
+            self.transcriber_thread.join()
+        if self.vad_thread is not None:
+            self.vad_thread.join()
+        # Save full recording if path was provided
+        if self.audio_file_path and self.full_recording_list:
+            full_audio = np.concatenate(self.full_recording_list)
+            sf.write(self.audio_file_path, full_audio, self.sample_rate)
+            print(f"Audio saved to {self.audio_file_path}")
+
     def run(self):
         """Start the real-time transcription process"""
         print(f"Real-time transcribe (Model: Whisper {self.model_size})... (Ctrl+C to stop)")
         self.running = True
         self.start_time = time.time()
 
-        # Start transcription thread
-        self.transcriber_thread = threading.Thread(target=self.transcribe, daemon=True)
+        # Start VAD and transcription threads
+        self.transcriber_thread = threading.Thread(target=self._transcribe, daemon=True)
+        self.vad_thread = threading.Thread(target=self._vad_worker, daemon=True)
         self.transcriber_thread.start()
+        self.vad_thread.start()
 
         try:
             # Start audio input stream
             with sd.InputStream(samplerate=self.sample_rate,
                                 channels=1,
                                 dtype='float32',
-                                callback=self.audio_callback,
+                                callback=self._audio_callback,
                                 blocksize=self.frame_size):  # Use frame_size for better VAD performance
                 while self.running:
                     time.sleep(0.1)
         except KeyboardInterrupt:
             print("\nStopping...")
-            self.stop()
-
-    def stop(self):
-        """Stop the transcription process"""
-        self.running = False
-        self.q.put(None)
-        if self.transcriber_thread is not None:
-            self.transcriber_thread.join()
-        # Save full recording if path was provided
-        if self.audio_file_path and len(self.full_recording) > 0:
-            sf.write(self.audio_file_path, self.full_recording, self.sample_rate)
-            print(f"Audio saved to {self.audio_file_path}")
+            self._stop()
 
     def evaluate(self):
         """Transcribe saved audio using Whisper model and compare with real-time transcript."""
         if self.audio_file_path is None:
             print("No audio_file_path provided for evaluation.")
             return None
-
-        # Load and transcribe reference audio
-        result = self.model.transcribe(str(self.audio_file_path))
+        result = self.stt_model.transcribe(str(self.audio_file_path))
         self.reference_transcript = result["text"].strip()
-
-        # Get transcription text from real-time transcription
         self.realtime_transcript = " ".join(self.transcript).strip()
-
-        # Calculate WER and CER
-        wer_error = wer(self.reference_transcript, self.realtime_transcript)
-        cer_error = cer(self.reference_transcript, self.realtime_transcript)
-
-        # Display results
+        wer_error = wer(self.reference_transcript.lower(), self.realtime_transcript.lower())
+        cer_error = cer(self.reference_transcript.lower(), self.realtime_transcript.lower())
         print(f"Word Error Rate (WER): {wer_error:.2%}")
         print(f"Character Error Rate (CER): {cer_error:.2%}")
         print(f"Reference Transcript: {self.reference_transcript}")
         print(f"Realtime Transcript: {self.realtime_transcript}")
-
         return {"WER": wer_error, "CER": cer_error}
 
 
 if __name__ == "__main__":
     self = RealTimeTranscribe(audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
-                              model_size="small",
+                              model_size="small.en",
                               translate_enabled=True)
     self.run()
 
