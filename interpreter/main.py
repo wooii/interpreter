@@ -3,13 +3,13 @@ import threading
 import queue
 import time
 import datetime
-import webrtcvad
 import collections
 import warnings
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import noisereduce as nr
+import torch
 from jiwer import wer, cer
 from transformers import MarianMTModel, MarianTokenizer
 from interpreter import data_folder
@@ -41,13 +41,11 @@ class RealTimeTranscribe:
                  audio_file_path=None,
                  model_size="small",
                  translate_enabled=True,
-                 word_prob_threshold=0.85,
-                 vad_aggressiveness=1):
+                 word_prob_threshold=0.85):
         self.audio_file_path = audio_file_path
         self.model_size = model_size
         self.translate_enabled = translate_enabled
         self.word_prob_threshold = word_prob_threshold
-        self.vad_aggressiveness = vad_aggressiveness
         self._initialize_models()
         self._initialize_audio_params()
         self._initialize_state()
@@ -57,18 +55,22 @@ class RealTimeTranscribe:
         self.stt_model = whisper.load_model(self.model_size)
         if self.translate_enabled:
             self.translator = OfflineTranslator()
+        # Initialize Silero VAD model
+        self.vad_model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad',
+                                           model='silero_vad',
+                                           force_reload=False,
+                                           onnx=False)
 
     def _initialize_audio_params(self):
         """Initialize audio processing parameters."""
         self.sample_rate = 16000
-        self.frame_duration_ms = 20  # 20ms frames as required by VAD
-        self.frame_size = int(self.sample_rate * (self.frame_duration_ms / 1000.0))
-        self.vad = webrtcvad.Vad(self.vad_aggressiveness)
+        # Use 512 samples which is a good size for Silero VAD (32ms at 16kHz)
+        self.frame_size = 512
 
     def _initialize_state(self):
         """Initialize state management variables."""
         # Ring buffer to store audio frames
-        self.ring_buffer = collections.deque(maxlen=10)
+        self.ring_buffer = collections.deque(maxlen=20)
         self.triggered = False  # State to track if we're in a speech segment
 
         # Storage for recorded frames and previous audio
@@ -100,7 +102,12 @@ class RealTimeTranscribe:
         """Check if a frame contains speech using VAD"""
         if len(frame) != self.frame_size:
             return False
-        return self.vad.is_speech(self._float_to_pcm16(frame), self.sample_rate)
+        # Convert frame to tensor for Silero VAD
+        frame_tensor = torch.from_numpy(frame).float()
+        # Apply Silero VAD model
+        speech_prob = self.vad_model(frame_tensor, self.sample_rate).item()
+        # Use a threshold to determine speech activity (0.5 is a common default)
+        return speech_prob > 0.4
 
     def _audio_callback(self, indata, frames, time_info, status):
         """Minimal audio callback: just slice frames and enqueue."""
@@ -135,7 +142,6 @@ class RealTimeTranscribe:
                     self.ring_buffer.clear()
             else:
                 self.recorded_frames.append(frame)
-
                 if sum(1 for _, s in self.ring_buffer if not s) > 0.9 * self.ring_buffer.maxlen:
                     if self.recorded_frames:
                         segment = np.concatenate(self.recorded_frames)
@@ -254,6 +260,7 @@ class RealTimeTranscribe:
                 audio=processed_segment.astype(np.float32),
                 word_timestamps=True,
                 temperature=0.0,
+                beam_size=1,
                 no_speech_threshold=0.5,  # less likely to skip quiet speech
                 logprob_threshold=-0.3,   # accept more uncertain words
                 condition_on_previous_text=True,
