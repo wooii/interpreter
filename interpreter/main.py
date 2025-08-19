@@ -5,13 +5,14 @@ import time
 import datetime
 import collections
 import warnings
+import torch
+import ollama
+import re
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import noisereduce as nr
-import torch
 from jiwer import wer, cer
-from transformers import MarianMTModel, MarianTokenizer
 from interpreter import data_folder
 
 
@@ -21,15 +22,23 @@ warnings.filterwarnings(
 )
 
 
-class OfflineTranslator:
-    def __init__(self, model_name="Helsinki-NLP/opus-mt-en-zh"):
-        self.tokenizer = MarianTokenizer.from_pretrained(model_name)
-        self.translator = MarianMTModel.from_pretrained(model_name)
+class OllamaTranslator:
+    def __init__(self, model="qwen3:0.6b", target_lang="Chinese"):
+        self.model = model
+        self.target_lang = target_lang
 
-    def translate(self, text):
-        batch = self.tokenizer([text], return_tensors="pt", padding=True)
-        gen = self.translator.generate(**batch)
-        return self.tokenizer.decode(gen[0], skip_special_tokens=True)
+    def translate(self, text: str) -> str:
+        if not text.strip():
+            return ""
+        prompt = f"Translate to {self.target_lang}:\n{text} /no_think"
+        try:
+            response = ollama.generate(model=self.model, prompt=prompt)
+            translated = response["response"].strip()
+            # Remove any <think> sections
+            translated = re.sub(r'<think>.*?</think>', '', translated, flags=re.DOTALL)
+            return translated.strip()
+        except Exception as e:
+            return f"[Translation error: {e}]"
 
 
 class RealTimeTranscribe:
@@ -40,11 +49,11 @@ class RealTimeTranscribe:
     def __init__(self,
                  audio_file_path=None,
                  model_size="small",
-                 translate_enabled=True,
+                 translate_to="Chinese",
                  word_prob_threshold=0.85):
         self.audio_file_path = audio_file_path
         self.model_size = model_size
-        self.translate_enabled = translate_enabled
+        self.translate_to = translate_to
         self.word_prob_threshold = word_prob_threshold
         self._initialize_models()
         self._initialize_audio_params()
@@ -53,8 +62,8 @@ class RealTimeTranscribe:
     def _initialize_models(self):
         """Initialize Whisper model and optional translator."""
         self.stt_model = whisper.load_model(self.model_size)
-        if self.translate_enabled:
-            self.translator = OfflineTranslator()
+        if self.translate_to is not None:
+            self.translator = OllamaTranslator(model="qwen3:0.6b", target_lang=self.translate_to)
         # Initialize Silero VAD model
         self.vad_model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad',
                                            model='silero_vad',
@@ -216,7 +225,7 @@ class RealTimeTranscribe:
             dt = (datetime.datetime.min + elapsed)
             time_str = dt.strftime("%M:%S.%f")[:-3]  # MM:SS.mmm
 
-            if self.translate_enabled:
+            if self.translate_to is not None:
                 translated = self.translator.translate(sentence)
                 print(f"[{time_str}] {text} → {translated}")
             else:
@@ -337,7 +346,7 @@ class RealTimeTranscribe:
 if __name__ == "__main__":
     self = RealTimeTranscribe(audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
                               model_size="small.en",
-                              translate_enabled=True)
+                              translate_to="Chinese")
     self.run()
 
     self.evaluate()
