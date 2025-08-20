@@ -100,22 +100,25 @@ class CompareModels:
         else:
             print("Skipping whispercpp.py model initialization - not available")
 
-    def transcribe_with_whisper(self, model, model_name, language=None):
+    def transcribe_with_whisper(self, model, model_name):
         try:
             print(f"Transcribing with {model_name}...")
             start_time = time.time()
-            result = model.transcribe(str(self.audio_file_path), language=language) if language else model.transcribe(str(self.audio_file_path))
+            result = model.transcribe(str(self.audio_file_path),
+                                      temperature=0.0,
+                                      beam_size=1,
+                                      )
             text = result["text"]
             execution_time = time.time() - start_time
             return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
         except Exception as e:
             return f"{model_name}: Error - {str(e)}"
 
-    def transcribe_with_faster_whisper(self, model, model_name, language=None):
+    def transcribe_with_faster_whisper(self, model, model_name):
         try:
             print(f"Transcribing with {model_name}...")
             start_time = time.time()
-            segments, info = model.transcribe(str(self.audio_file_path), language=language, beam_size=1) if language else model.transcribe(str(self.audio_file_path), beam_size=1)
+            segments, info = model.transcribe(str(self.audio_file_path), beam_size=1)
             text = "".join([segment.text for segment in segments])
             execution_time = time.time() - start_time
             return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
