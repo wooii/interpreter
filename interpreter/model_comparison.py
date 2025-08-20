@@ -15,14 +15,156 @@ As of 2025-08-20, Whisper.cpp via pywhispercpp seems to be the fastest on Mac M4
 
 import time
 import whisper
+import faster_whisper
+import pywhispercpp
+import whispercpp
 import sounddevice as sd
 import soundfile as sf
-from faster_whisper import WhisperModel as FasterWhisperModel
-from pywhispercpp.model import Model as PyWhisperCppModel
-from whispercpp import Whisper
 from pathlib import Path
 import warnings
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
+
+
+class WhisperModel:
+    """Class to handle loading and transcription for OpenAI Whisper models"""
+
+    def __init__(self, model_size):
+        self.model_size = model_size
+        self.model = None
+        self.load_model()
+
+    def load_model(self):
+        """Load the OpenAI Whisper model"""
+        try:
+            self.model = whisper.load_model(self.model_size)
+            print(f"✓ Whisper {self.model_size} model loaded")
+        except Exception as e:
+            print(f"✗ Failed to load Whisper {self.model_size} model: {e}")
+            self.model = None
+
+    def transcribe(self, audio_file_path):
+        """Transcribe audio using OpenAI Whisper model"""
+        if self.model is None:
+            return f"Whisper {self.model_size}: Error - Model not loaded"
+
+        try:
+            print(f"Transcribing with Whisper {self.model_size}...")
+            start_time = time.time()
+            result = self.model.transcribe(str(audio_file_path),
+                                          temperature=0.0,
+                                          beam_size=1)
+            text = result["text"]
+            execution_time = time.time() - start_time
+            return f"Whisper {self.model_size}: {text} (Time: {execution_time:.2f}s)"
+        except Exception as e:
+            return f"Whisper {self.model_size}: Error - {str(e)}"
+
+
+class FasterWhisperModel:
+    """Class to handle loading and transcription for Faster-Whisper models"""
+
+    def __init__(self, model_size):
+        self.model_size = model_size
+        self.model = None
+        self.load_model()
+
+    def load_model(self):
+        """Load the Faster-Whisper model"""
+        try:
+            self.model = faster_whisper.WhisperModel(self.model_size, device="auto", compute_type="int8")
+            print(f"✓ Faster-Whisper {self.model_size} model loaded")
+        except Exception as e:
+            print(f"✗ Failed to load Faster-Whisper {self.model_size} model: {e}")
+            self.model = None
+
+    def transcribe(self, audio_file_path):
+        """Transcribe audio using Faster-Whisper model"""
+        if self.model is None:
+            return f"Faster-Whisper {self.model_size}: Error - Model not loaded"
+
+        try:
+            print(f"Transcribing with Faster-Whisper {self.model_size}...")
+            start_time = time.time()
+            segments, info = self.model.transcribe(str(audio_file_path),
+                                                   beam_size=1)
+            text = "".join([segment.text for segment in segments])
+            execution_time = time.time() - start_time
+            return f"Faster-Whisper {self.model_size}: {text} (Time: {execution_time:.2f}s)"
+        except Exception as e:
+            return f"Faster-Whisper {self.model_size}: Error - {str(e)}"
+
+
+class PyWhisperCppModel:
+    """Class to handle loading and transcription for pywhispercpp models"""
+
+    def __init__(self, model_size):
+        self.model_size = model_size
+        self.model = None
+        self.load_model()
+
+    def load_model(self):
+        """Load the pywhispercpp model"""
+        try:
+            self.model = pywhispercpp.model.Model(
+                self.model_size,
+                n_threads=2,
+                token_timestamps=True,
+                max_len=1,
+                split_on_word=True
+            )
+            print(f"✓ pywhispercpp {self.model_size} model loaded")
+        except Exception as e:
+            print(f"✗ Failed to load pywhispercpp {self.model_size} model: {e}")
+            self.model = None
+
+    def transcribe(self, audio_file_path):
+        """Transcribe audio using pywhispercpp model"""
+        if self.model is None:
+            return f"pywhispercpp {self.model_size}: Error - Model not loaded"
+
+        try:
+            print(f"Transcribing with pywhispercpp {self.model_size}...")
+            start_time = time.time()
+            segments = self.model.transcribe(str(audio_file_path))
+            text = " ".join(seg.text.strip() for seg in segments)
+            execution_time = time.time() - start_time
+            return f"pywhispercpp {self.model_size}: {text} (Time: {execution_time:.2f}s)"
+        except Exception as e:
+            return f"pywhispercpp {self.model_size}: Error - {str(e)}"
+
+
+class WhisperCppModel:
+    """Class to handle loading and transcription for whispercpp.py models"""
+
+    def __init__(self, model_size):
+        self.model_size = model_size
+        self.model = None
+        self.load_model()
+
+    def load_model(self):
+        """Load the whispercpp.py model"""
+        try:
+            self.model = whispercpp.Whisper(self.model_size)
+            print(f"✓ whispercpp.py {self.model_size} model loaded")
+        except Exception as e:
+            print(f"✗ Failed to load whispercpp.py {self.model_size} model: {e}")
+            self.model = None
+
+    def transcribe(self, audio_file_path):
+        """Transcribe audio using whispercpp.py model"""
+        if self.model is None:
+            return f"whispercpp.py {self.model_size}: Error - Model not loaded"
+
+        try:
+            print(f"Transcribing with whispercpp.py {self.model_size}...")
+            start_time = time.time()
+            result = self.model.transcribe(str(audio_file_path))
+            # Use the extract_text method to get the actual transcription
+            text = " ".join(self.model.extract_text(result))
+            execution_time = time.time() - start_time
+            return f"whispercpp.py {self.model_size}: {text} (Time: {execution_time:.2f}s)"
+        except Exception as e:
+            return f"whispercpp.py {self.model_size}: Error - {str(e)}"
 
 
 class CompareModels:
@@ -51,102 +193,28 @@ class CompareModels:
         print("Initializing models...")
 
         # Initialize Whisper models
-        self.whisper_models = {}
+        self.whisper_models = []
         for model_size in self.whisper_model_sizes:
-            try:
-                model = whisper.load_model(model_size)
-                self.whisper_models[model_size] = model
-                print(f"✓ Whisper {model_size} model loaded")
-            except Exception as e:
-                print(f"✗ Failed to load Whisper {model_size} model: {e}")
+            model = WhisperModel(model_size)
+            self.whisper_models.append(model)
 
         # Initialize Faster-Whisper models
-        self.faster_whisper_models = {}
+        self.faster_whisper_models = []
         for model_size in self.faster_whisper_model_sizes:
-            try:
-                model = FasterWhisperModel(model_size, device="auto", compute_type="int8")
-                self.faster_whisper_models[model_size] = model
-                print(f"✓ Faster-Whisper {model_size} model loaded")
-            except Exception as e:
-                print(f"✗ Failed to load Faster-Whisper {model_size} model: {e}")
+            model = FasterWhisperModel(model_size)
+            self.faster_whisper_models.append(model)
 
         # Initialize pywhispercpp models
-        self.pywhispercpp_models = {}
+        self.pywhispercpp_models = []
         for model_size in self.pywhispercpp_model_sizes:
-                try:
-                    model = PyWhisperCppModel(
-                        model_size,
-                        n_threads=2,
-                        token_timestamps=True,
-                        max_len=1,
-                        split_on_word=True
-                    )
-                    self.pywhispercpp_models[model_size] = model
-                    print(f"✓ pywhispercpp {model_size} model loaded")
-                except Exception as e:
-                    print(f"✗ Failed to load pywhispercpp {model_size} model: {e}")
-        else:
-            print("Skipping pywhispercpp model initialization - not available")
+            model = PyWhisperCppModel(model_size)
+            self.pywhispercpp_models.append(model)
 
         # Initialize whispercpp.py models
-        self.whispercpp_models = {}
+        self.whispercpp_models = []
         for model_size in self.whispercpp_model_sizes:
-                try:
-                    model = Whisper(model_size)
-                    self.whispercpp_models[model_size] = model
-                    print(f"✓ whispercpp.py {model_size} model loaded")
-                except Exception as e:
-                    print(f"✗ Failed to load whispercpp.py {model_size} model: {e}")
-        else:
-            print("Skipping whispercpp.py model initialization - not available")
-
-    def transcribe_with_whisper(self, model, model_name):
-        try:
-            print(f"Transcribing with {model_name}...")
-            start_time = time.time()
-            result = model.transcribe(str(self.audio_file_path),
-                                      temperature=0.0,
-                                      beam_size=1,
-                                      )
-            text = result["text"]
-            execution_time = time.time() - start_time
-            return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
-        except Exception as e:
-            return f"{model_name}: Error - {str(e)}"
-
-    def transcribe_with_faster_whisper(self, model, model_name):
-        try:
-            print(f"Transcribing with {model_name}...")
-            start_time = time.time()
-            segments, info = model.transcribe(str(self.audio_file_path), beam_size=1)
-            text = "".join([segment.text for segment in segments])
-            execution_time = time.time() - start_time
-            return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
-        except Exception as e:
-            return f"{model_name}: Error - {str(e)}"
-
-    def transcribe_with_pywhispercpp(self, model, model_name):
-        try:
-            print(f"Transcribing with {model_name}...")
-            start_time = time.time()
-            segments = model.transcribe(str(self.audio_file_path))
-            text = " ".join(seg.text.strip() for seg in segments)
-            execution_time = time.time() - start_time
-            return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
-        except Exception as e:
-            return f"{model_name}: Error - {str(e)}"
-
-    def transcribe_with_whispercpp(self, model, model_name):
-        try:
-            print(f"Transcribing with {model_name}...")
-            start_time = time.time()
-            result = model.transcribe(str(self.audio_file_path))
-            # Use the extract_text method to get the actual transcription
-            text = " ".join(model.extract_text(result))
-            execution_time = time.time() - start_time
-            return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
-        except Exception as e:
-            return f"{model_name}: Error - {str(e)}"
+            model = WhisperCppModel(model_size)
+            self.whispercpp_models.append(model)
 
     def record_audio(self, duration=5):
         """Record audio for a specified duration"""
@@ -171,23 +239,23 @@ class CompareModels:
 
         results = []
 
-        for model_size, model in self.whisper_models.items():
-            result = self.transcribe_with_whisper(model, f"Whisper {model_size}")
+        for model in self.whisper_models:
+            result = model.transcribe(self.audio_file_path)
             results.append(result)
             print(result)
 
-        for model_size, model in self.faster_whisper_models.items():
-            result = self.transcribe_with_faster_whisper(model, f"Faster-Whisper {model_size}")
+        for model in self.faster_whisper_models:
+            result = model.transcribe(self.audio_file_path)
             results.append(result)
             print(result)
 
-        for model_size, model in self.pywhispercpp_models.items():
-            result = self.transcribe_with_pywhispercpp(model, f"pywhispercpp {model_size}")
+        for model in self.pywhispercpp_models:
+            result = model.transcribe(self.audio_file_path)
             results.append(result)
             print(result)
 
-        for model_size, model in self.whispercpp_models.items():
-            result = self.transcribe_with_whispercpp(model, f"whispercpp.py {model_size}")
+        for model in self.whispercpp_models:
+            result = model.transcribe(self.audio_file_path)
             results.append(result)
             print(result)
 
@@ -214,4 +282,3 @@ if __name__ == "__main__":
 
     self.record_audio(duration=10)
     self.compare_models()
-
