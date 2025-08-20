@@ -1,20 +1,16 @@
 """
 Model Comparison Script for Local Speech Recognition
 
-This script allows you to compare the performance of various local speech
-recognition models by recording audio and transcribing it with multiple
-local models including Whisper and Faster-Whisper.
+This script compares the performance of various local speech
+recognition models (Whisper, Faster-Whisper, Whisper.cpp via pywhispercpp and whispercpp).
 
-I have tested orther models like Google Speech Recognition, Sphinx using
-speech_recoganision, vosk and others.
+Tested models include:
+- OpenAI Whisper (tiny, base, small, etc.)
+- Faster-Whisper (CTranslate2 backend)
+- Whisper.cpp via pywhispercpp
+- Whisper.cpp via whispercpp
 
-As of 2025-07-27, Whisper and Faster-Whisper models consistently deliver the
-highest accuracy for local speech recognition, which is why this script
-focuses on these models.
-
-However, it seems that the Whisper models are faster than Faster-Whisper
-models running on MacOS, and the Whisper small model is quite accurate.
-
+As of 2025-08-20, Whisper.cpp via pywhispercpp seems to be the fastest on Mac M4 16 GB.
 """
 
 import time
@@ -22,18 +18,25 @@ import whisper
 import sounddevice as sd
 import soundfile as sf
 from faster_whisper import WhisperModel as FasterWhisperModel
+from pywhispercpp.model import Model as PyWhisperCppModel
+from whispercpp import Whisper
 from pathlib import Path
 import warnings
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
+
 class CompareModels:
     def __init__(self, whisper_model_sizes=["tiny", "base", "small"],
                  faster_whisper_model_sizes=["base", "small"],
+                 pywhispercpp_model_sizes=["base", "small"],
+                 whispercpp_model_sizes=["base", "small"],
                  data_folder=Path.home() / "Data",
                  audio_file_name="comparison_recording.wav",
-                 comparison_results_file_name="comparison_results.txt",):
+                 comparison_results_file_name="comparison_results.txt"):
         self.whisper_model_sizes = whisper_model_sizes
         self.faster_whisper_model_sizes = faster_whisper_model_sizes
+        self.pywhispercpp_model_sizes = pywhispercpp_model_sizes
+        self.whispercpp_model_sizes = whispercpp_model_sizes
         self.sampling_rate = 16000
 
         self.data_folder = Path(data_folder)
@@ -67,35 +70,77 @@ class CompareModels:
             except Exception as e:
                 print(f"✗ Failed to load Faster-Whisper {model_size} model: {e}")
 
+        # Initialize pywhispercpp models
+        self.pywhispercpp_models = {}
+        for model_size in self.pywhispercpp_model_sizes:
+                try:
+                    model = PyWhisperCppModel(
+                        model_size,
+                        n_threads=2,
+                        token_timestamps=True,
+                        max_len=1,
+                        split_on_word=True
+                    )
+                    self.pywhispercpp_models[model_size] = model
+                    print(f"✓ pywhispercpp {model_size} model loaded")
+                except Exception as e:
+                    print(f"✗ Failed to load pywhispercpp {model_size} model: {e}")
+        else:
+            print("Skipping pywhispercpp model initialization - not available")
+
+        # Initialize whispercpp.py models
+        self.whispercpp_models = {}
+        for model_size in self.whispercpp_model_sizes:
+                try:
+                    model = Whisper(model_size)
+                    self.whispercpp_models[model_size] = model
+                    print(f"✓ whispercpp.py {model_size} model loaded")
+                except Exception as e:
+                    print(f"✗ Failed to load whispercpp.py {model_size} model: {e}")
+        else:
+            print("Skipping whispercpp.py model initialization - not available")
+
     def transcribe_with_whisper(self, model, model_name, language=None):
-        """Transcribe audio using a Whisper model"""
         try:
             print(f"Transcribing with {model_name}...")
             start_time = time.time()
-            if language:
-                result = model.transcribe(str(self.audio_file_path), language=language)
-            else:
-                result = model.transcribe(str(self.audio_file_path))
-            end_time = time.time()
-            execution_time = end_time - start_time
-            return f"{model_name}: {result['text']} (Time: {execution_time:.2f}s)"
+            result = model.transcribe(str(self.audio_file_path), language=language) if language else model.transcribe(str(self.audio_file_path))
+            text = result["text"]
+            execution_time = time.time() - start_time
+            return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
         except Exception as e:
             return f"{model_name}: Error - {str(e)}"
 
     def transcribe_with_faster_whisper(self, model, model_name, language=None):
-        """Transcribe audio using Faster-Whisper model"""
         try:
             print(f"Transcribing with {model_name}...")
             start_time = time.time()
-            if language:
-                segments, info = model.transcribe(str(self.audio_file_path), language=language, beam_size=1)
-            else:
-                segments, info = model.transcribe(str(self.audio_file_path), beam_size=1)
-
-            # Join all segments to get the full transcription
+            segments, info = model.transcribe(str(self.audio_file_path), language=language, beam_size=1) if language else model.transcribe(str(self.audio_file_path), beam_size=1)
             text = "".join([segment.text for segment in segments])
-            end_time = time.time()
-            execution_time = end_time - start_time
+            execution_time = time.time() - start_time
+            return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
+        except Exception as e:
+            return f"{model_name}: Error - {str(e)}"
+
+    def transcribe_with_pywhispercpp(self, model, model_name):
+        try:
+            print(f"Transcribing with {model_name}...")
+            start_time = time.time()
+            segments = model.transcribe(str(self.audio_file_path))
+            text = " ".join(seg.text.strip() for seg in segments)
+            execution_time = time.time() - start_time
+            return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
+        except Exception as e:
+            return f"{model_name}: Error - {str(e)}"
+
+    def transcribe_with_whispercpp(self, model, model_name):
+        try:
+            print(f"Transcribing with {model_name}...")
+            start_time = time.time()
+            result = model.transcribe(str(self.audio_file_path))
+            # Use the extract_text method to get the actual transcription
+            text = " ".join(model.extract_text(result))
+            execution_time = time.time() - start_time
             return f"{model_name}: {text} (Time: {execution_time:.2f}s)"
         except Exception as e:
             return f"{model_name}: Error - {str(e)}"
@@ -121,22 +166,28 @@ class CompareModels:
         print("Speech Recognition Model Comparison")
         print("=" * 50)
 
-        # Test all models
         results = []
 
-        # Whisper models
         for model_size, model in self.whisper_models.items():
             result = self.transcribe_with_whisper(model, f"Whisper {model_size}")
             results.append(result)
             print(result)
 
-        # Faster-Whisper models
         for model_size, model in self.faster_whisper_models.items():
             result = self.transcribe_with_faster_whisper(model, f"Faster-Whisper {model_size}")
             results.append(result)
             print(result)
 
-        # Save results to file
+        for model_size, model in self.pywhispercpp_models.items():
+            result = self.transcribe_with_pywhispercpp(model, f"pywhispercpp {model_size}")
+            results.append(result)
+            print(result)
+
+        for model_size, model in self.whispercpp_models.items():
+            result = self.transcribe_with_whispercpp(model, f"whispercpp.py {model_size}")
+            results.append(result)
+            print(result)
+
         with open(self.comparison_results_path, "w", encoding="utf-8") as f:
             f.write("Speech Recognition Model Comparison Results\n")
             f.write("=" * 50 + "\n")
@@ -149,12 +200,15 @@ class CompareModels:
 
 if __name__ == "__main__":
     self = CompareModels(
-        whisper_model_sizes=["tiny", "base", "small", "medium", "turbo"],
+        whisper_model_sizes=["tiny", "base", "small"],
         faster_whisper_model_sizes=["base", "small"],
+        pywhispercpp_model_sizes=["base", "small"],
+        whispercpp_model_sizes=["base", "small"],
         data_folder=Path.home() / "Data",
         audio_file_name="comparison_recording.wav",
         comparison_results_file_name="comparison_results.txt",
-        )
+    )
+
     self.record_audio(duration=10)
     self.compare_models()
 
