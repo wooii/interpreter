@@ -22,6 +22,7 @@ import sounddevice as sd
 import soundfile as sf
 from pathlib import Path
 import warnings
+from interpreter import data_folder
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
 
@@ -172,7 +173,7 @@ class CompareModels:
                  faster_whisper_model_sizes=["base", "small"],
                  pywhispercpp_model_sizes=["base", "small"],
                  whispercpp_model_sizes=["base", "small"],
-                 data_folder=Path.home() / "Data",
+                 data_folder=data_folder / "interpreter",
                  audio_file_name="comparison_recording.wav",
                  comparison_results_file_name="comparison_results.txt"):
         self.whisper_model_sizes = whisper_model_sizes
@@ -181,8 +182,7 @@ class CompareModels:
         self.whispercpp_model_sizes = whispercpp_model_sizes
         self.sampling_rate = 16000
 
-        self.data_folder = Path(data_folder)
-        self.data_folder.mkdir(parents=True, exist_ok=True)
+        self.data_folder = data_folder
         self.audio_file_path = self.data_folder / audio_file_name
         self.comparison_results_path = self.data_folder / comparison_results_file_name
 
@@ -250,7 +250,7 @@ class CompareModels:
             print(result)
 
         for model in self.pywhispercpp_models:
-            result = model.transcribe(self.audio_file_path)
+            result = model.transcribe(str(self.audio_file_path))
             results.append(result)
             print(result)
 
@@ -275,7 +275,7 @@ if __name__ == "__main__":
         faster_whisper_model_sizes=["base", "small"],
         pywhispercpp_model_sizes=["base", "small"],
         whispercpp_model_sizes=["base", "small"],
-        data_folder=Path.home() / "Data",
+        data_folder=data_folder / "interpreter",
         audio_file_name="comparison_recording.wav",
         comparison_results_file_name="comparison_results.txt",
     )

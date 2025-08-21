@@ -104,8 +104,10 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Specify the data_folder
 data_folder = Path.home() / "Data"
-if not data_folder.exists():
-    raise EnvironmentError(f"{data_folder} does not exist.")
+try:
+    data_folder.mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    raise EnvironmentError(f"Could not create {data_folder}: {e}")
 
 # Load API keys
 with open(data_folder / "api/api_keys_for_ai.yaml", "r") as keys_file:
