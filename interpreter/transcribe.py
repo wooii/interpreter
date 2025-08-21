@@ -15,10 +15,9 @@ import noisereduce as nr
 from jiwer import wer, cer
 from interpreter import data_folder
 
-
 warnings.filterwarnings(action="ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
-# --- VAD Wrapper ---
+
 class SileroVAD:
     def __init__(self, frame_size=512, sample_rate=16000):
         self.frame_size = frame_size
@@ -34,7 +33,7 @@ class SileroVAD:
         speech_prob = self.model(frame_tensor, self.sample_rate).item()
         return speech_prob > 0.4
 
-# --- Translator ---
+
 class Translator:
     def __init__(self, model="qwen3:0.6b", target_lang="Chinese"):
         self.model = model
@@ -51,7 +50,7 @@ class Translator:
         except Exception as e:
             return f"[Translation error: {e}]"
 
-# --- Audio Processing ---
+
 def process_audio_segment(full_segment, sample_rate):
     if np.sqrt(np.mean(full_segment**2)) < 0.001:
         return None
@@ -60,23 +59,38 @@ def process_audio_segment(full_segment, sample_rate):
     full_segment = nr.reduce_noise(y=full_segment, sr=sample_rate)
     return full_segment
 
-# --- STT Backend Interface ---
+
+
 class SpeechToText:
     def transcribe(self, audio: np.ndarray):
         raise NotImplementedError
+
     def transcribe_file(self, file_path: str):
         raise NotImplementedError
-    def extract_words(self, result):
-        raise NotImplementedError
+
     def extract_text(self, result):
         raise NotImplementedError
+
     def format_and_display_transcription(self, all_words, transcript, start_time, translator=None, translate_to=None):
         raise NotImplementedError
+
+    def _color_word(self, word, prob):
+        prob = max(0.0, min(1.0, prob))
+        if prob < 0.5:
+            r = 255
+            g = int(2 * prob * 255)
+        else:
+            r = int((1 - 2 * (prob - 0.5)) * 255)
+            g = 255
+        b = 0
+        return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
+
 
 class WhisperBackend(SpeechToText):
     def __init__(self, model_size):
         import whisper
         self.model = whisper.load_model(model_size)
+
     def transcribe(self, audio: np.ndarray):
         return self.model.transcribe(
             audio=audio.astype(np.float32),
@@ -88,32 +102,23 @@ class WhisperBackend(SpeechToText):
             condition_on_previous_text=True,
             fp16=False
         )
+
     def transcribe_file(self, file_path: str):
         return self.model.transcribe(str(file_path))
-    def extract_words(self, result):
+
+    def extract_text(self, result):
+        return result["text"].strip()
+
+    def format_and_display_transcription(self, result, transcript, start_time, translator=None, translate_to=None):
         all_words = []
         if isinstance(result, dict) and "segments" in result:
             for seg in result["segments"]:
                 if "words" in seg:
                     all_words.extend(seg["words"])
-            return all_words
-        return []
-    def extract_text(self, result):
-        return result["text"].strip()
-    def _color_word(self, word, prob):
-        prob = max(0.0, min(1.0, prob))
-        if prob < 0.5:
-            r = 255
-            g = int(2 * prob * 255)
-        else:
-            r = int((1 - 2 * (prob - 0.5)) * 255)
-            g = 255
-        b = 0
-        return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
-    def format_and_display_transcription(self, all_words, transcript, start_time, translator=None, translate_to=None):
+
         if not all_words:
             return
-        sentence = " ".join(w["word"].strip() for w in all_words if w["word"].strip())
+        sentence = self.extract_text(result)
         text = " ".join(self._color_word(w["word"].strip(), w.get("probability", 1.0)) for w in all_words if w["word"].strip()).strip()
         if text:
             transcript.append(sentence)
@@ -128,37 +133,44 @@ class WhisperBackend(SpeechToText):
                 output = f"[{time_str}] {text}"
             print(output)
 
+
 class PyWhisperCppBackend(SpeechToText):
     def __init__(self, model_size):
-        from pywhispercpp.model import Model
-        self.model = Model(model_size,
-                           token_timestamps=True,
-                           max_len=1,
-                           split_on_word=True,
-                           print_progress=False)
+        from interpreter.whispercpp import WhisperCppModel
+        self.model = WhisperCppModel(model_size,
+                                     token_timestamps=True,
+                                     max_len=1,
+                                     split_on_word=True,
+                                     print_progress=False)
+
     def transcribe(self, audio: np.ndarray):
         return self.model.transcribe(media=audio.astype(np.float32), temperature=0.0)
+
     def transcribe_file(self, file_path: str):
         return self.model.transcribe(str(file_path))
-    def extract_words(self, result):
-        if isinstance(result, list):
-            return [i.text for i in result]
-        return []
 
     def extract_text(self, result):
         return " ".join([i.text for i in result]).strip()
 
-    def format_and_display_transcription(self, all_words, transcript, start_time, translator=None, translate_to=None):
+    def format_and_display_transcription(self, result, transcript, start_time, translator=None, translate_to=None):
+        if isinstance(result, list):
+            all_words = [i.text for i in result]
+
         if not all_words:
             return
-        sentence = " ".join(all_words).strip()
-        text = f"\033[38;2;0;255;0m{sentence}\033[0m"
+
+        # Concatenate text for transcript
+        sentence = self.extract_text(result)
+        # Color words based on probability
+        text = " ".join(self._color_word(i.text.strip(), i.probability) for i in result).strip()
+
         if text:
             transcript.append(sentence)
             end = time.time()
             elapsed = datetime.timedelta(seconds=end - start_time)
-            dt = (datetime.datetime.min + elapsed)
+            dt = datetime.datetime.min + elapsed
             time_str = dt.strftime("%M:%S.%f")[:-3]
+
             if translate_to and translator:
                 translated = translator.translate(sentence)
                 output = f"[{time_str}] {text} → {translated}"
@@ -166,7 +178,6 @@ class PyWhisperCppBackend(SpeechToText):
                 output = f"[{time_str}] {text}"
             print(output)
 
-# --- RealTimeTranscribe ---
 
 class RealTimeTranscribe:
     def __init__(self, audio_file_path=None, model_size="small", translate_to="Chinese", use_whispercpp=True):
@@ -243,9 +254,8 @@ class RealTimeTranscribe:
             if processed_segment is None:
                 continue
             result = self.stt.transcribe(processed_segment)
-            all_words = self.stt.extract_words(result)
             output = self.stt.format_and_display_transcription(
-                all_words, self.transcript, self.start_time, self.translator, self.translate_to,
+                result, self.transcript, self.start_time, self.translator, self.translate_to,
             )
             if output:
                 print(output)
@@ -303,7 +313,7 @@ if __name__ == "__main__":
     self = RealTimeTranscribe(audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
                               model_size="small.en",
                               translate_to="Chinese",
-                              use_whispercpp=True,
+                              use_whispercpp=False,
                               )
 
     self.run()
