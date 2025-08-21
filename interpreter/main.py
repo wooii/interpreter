@@ -22,7 +22,7 @@ warnings.filterwarnings(
 )
 
 
-class OllamaTranslator:
+class Translator:
     def __init__(self, model="qwen3:0.6b", target_lang="Chinese"):
         self.model = model
         self.target_lang = target_lang
@@ -42,10 +42,7 @@ class OllamaTranslator:
 
 
 class RealTimeTranscribe:
-    """
-    Real-time transcription and translation.
-    For degraded audio (e.g., playback to mic), try vad_aggressiveness=2 or 3.
-    """
+    """Real-time transcription and optional translation."""
     def __init__(self,
                  audio_file_path=None,
                  model_size="small",
@@ -60,15 +57,14 @@ class RealTimeTranscribe:
         self._initialize_state()
 
     def _initialize_models(self):
-        """Initialize Whisper model and optional translator."""
-        self.stt_model = whisper.load_model(self.model_size)
-        if self.translate_to is not None:
-            self.translator = OllamaTranslator(model="qwen3:0.6b", target_lang=self.translate_to)
-        # Initialize Silero VAD model
+        """Initialize voice activity model, speech to text model and optional translation model."""
         self.vad_model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad',
                                            model='silero_vad',
                                            force_reload=False,
                                            onnx=False)
+        self.stt_model = whisper.load_model(self.model_size)
+        if self.translate_to is not None:
+            self.translation_model = Translator(model="qwen3:0.6b", target_lang=self.translate_to)
 
     def _initialize_audio_params(self):
         """Initialize audio processing parameters."""
@@ -226,7 +222,7 @@ class RealTimeTranscribe:
             time_str = dt.strftime("%M:%S.%f")[:-3]  # MM:SS.mmm
 
             if self.translate_to is not None:
-                translated = self.translator.translate(sentence)
+                translated = self.translation_model.translate(sentence)
                 print(f"[{time_str}] {text} → {translated}")
             else:
                 print(f"[{time_str}] {text}")
