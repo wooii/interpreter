@@ -55,10 +55,10 @@ class WhisperCppModel(Model):
             if n_tokens == 1:
                 avg_prob = pw.whisper_full_get_token_p(ctx, i, 0)
             elif n_tokens > 1:
-                probs = np.empty(n_tokens, dtype=np.float32)
+                total_logprob = 0.0
                 for j in range(n_tokens):
-                    probs[j] = pw.whisper_full_get_token_p(ctx, i, j)
-                avg_prob = probs.mean()
+                    total_logprob += np.log(pw.whisper_full_get_token_p(ctx, i, j))
+                avg_prob = np.exp(total_logprob / n_tokens)
             else:
                 avg_prob = 0.0
             res.append(MySegment(t0, t1, text.strip(), probability=np.float32(avg_prob)))
@@ -138,7 +138,7 @@ class WhisperCppModel(Model):
 
 
 if __name__ == "__main__":
-    model = WhisperCppModel("small",
+    model = WhisperCppModel("large-v3-turbo-q5_0",
                     token_timestamps=True,
                     max_len=1,
                     split_on_word=True,
