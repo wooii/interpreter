@@ -3,19 +3,16 @@ import queue
 import time
 import datetime
 import collections
-import warnings
 import torch
 import ollama
 import re
-import fire
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
 import noisereduce as nr
 from jiwer import wer, cer
+from interpreter.whispercpp import WhisperCppModel
 from interpreter import data_folder
-
-warnings.filterwarnings(action="ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
 
 class SileroVAD:
@@ -50,7 +47,6 @@ class Translator:
         except Exception as e:
             return f"[Translation error: {e}]"
 
-
 def process_audio_segment(full_segment, sample_rate):
     if np.sqrt(np.mean(full_segment**2)) < 0.001:
         return None
@@ -60,91 +56,20 @@ def process_audio_segment(full_segment, sample_rate):
     return full_segment
 
 
-
 class SpeechToText:
-    def transcribe(self, audio: np.ndarray):
-        raise NotImplementedError
-
-    def transcribe_file(self, file_path: str):
-        raise NotImplementedError
-
-    def extract_text(self, result):
-        raise NotImplementedError
-
-    def format_and_display_transcription(self, all_words, transcript, start_time, translator=None, translate_to=None):
-        raise NotImplementedError
-
-    def _color_word(self, word, prob):
-        prob = max(0.0, min(1.0, prob))
-        if prob < 0.5:
-            r = 255
-            g = int(2 * prob * 255)
-        else:
-            r = int((1 - 2 * (prob - 0.5)) * 255)
-            g = 255
-        b = 0
-        return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
-
-
-class WhisperBackend(SpeechToText):
     def __init__(self, model_size):
-        import whisper
-        self.model = whisper.load_model(model_size)
-
-    def transcribe(self, audio: np.ndarray):
-        return self.model.transcribe(
-            audio=audio.astype(np.float32),
-            word_timestamps=True,
-            temperature=0.0,
-            beam_size=1,
-            no_speech_threshold=0.5,
-            logprob_threshold=-0.3,
-            condition_on_previous_text=True,
-            fp16=False
-        )
-
-    def transcribe_file(self, file_path: str):
-        return self.model.transcribe(str(file_path))
-
-    def extract_text(self, result):
-        return result["text"].strip()
-
-    def format_and_display_transcription(self, result, transcript, start_time, translator=None, translate_to=None):
-        all_words = []
-        if isinstance(result, dict) and "segments" in result:
-            for seg in result["segments"]:
-                if "words" in seg:
-                    all_words.extend(seg["words"])
-
-        if not all_words:
-            return
-        sentence = self.extract_text(result)
-        text = " ".join(self._color_word(w["word"].strip(), w.get("probability", 1.0)) for w in all_words if w["word"].strip()).strip()
-        if text:
-            transcript.append(sentence)
-            end = time.time()
-            elapsed = datetime.timedelta(seconds=end - start_time)
-            dt = (datetime.datetime.min + elapsed)
-            time_str = dt.strftime("%M:%S.%f")[:-3]
-            if translate_to and translator:
-                translated = translator.translate(sentence)
-                output = f"[{time_str}] {text} → {translated}"
-            else:
-                output = f"[{time_str}] {text}"
-            print(output)
-
-
-class PyWhisperCppBackend(SpeechToText):
-    def __init__(self, model_size):
-        from interpreter.whispercpp import WhisperCppModel
         self.model = WhisperCppModel(model_size,
                                      token_timestamps=True,
                                      max_len=1,
                                      split_on_word=True,
+                                     #translate=False,
+                                     #language='chinese',
                                      print_progress=False)
 
     def transcribe(self, audio: np.ndarray):
-        return self.model.transcribe(media=audio.astype(np.float32), temperature=0.0)
+        return self.model.transcribe(media=audio.astype(np.float32),
+                                     temperature=0.0,
+                                     )
 
     def transcribe_file(self, file_path: str):
         return self.model.transcribe(str(file_path))
@@ -152,47 +77,17 @@ class PyWhisperCppBackend(SpeechToText):
     def extract_text(self, result):
         return " ".join([i.text for i in result]).strip()
 
-    def format_and_display_transcription(self, result, transcript, start_time, translator=None, translate_to=None):
-        if isinstance(result, list):
-            all_words = [i.text for i in result]
-
-        if not all_words:
-            return
-
-        # Concatenate text for transcript
-        sentence = self.extract_text(result)
-        # Color words based on probability
-        text = " ".join(self._color_word(i.text.strip(), i.probability) for i in result).strip()
-
-        if text:
-            transcript.append(sentence)
-            end = time.time()
-            elapsed = datetime.timedelta(seconds=end - start_time)
-            dt = datetime.datetime.min + elapsed
-            time_str = dt.strftime("%M:%S.%f")[:-3]
-
-            if translate_to and translator:
-                translated = translator.translate(sentence)
-                output = f"[{time_str}] {text} → {translated}"
-            else:
-                output = f"[{time_str}] {text}"
-            print(output)
-
 
 class RealTimeTranscribe:
-    def __init__(self, audio_file_path=None, model_size="small", translate_to="Chinese", use_whispercpp=True):
+    def __init__(self, audio_file_path=None, model_size="small", translate_to="Chinese"):
         self.audio_file_path = audio_file_path
         self.model_size = model_size
         self.translate_to = translate_to
-        self.use_whispercpp = use_whispercpp
         self.sample_rate = 16000
         self.frame_size = 512
         self.vad = SileroVAD(self.frame_size, self.sample_rate)
         self.translator = Translator(target_lang=translate_to) if translate_to else None
-        if self.use_whispercpp:
-            self.stt = PyWhisperCppBackend(model_size)
-        else:
-            self.stt = WhisperBackend(model_size)
+        self.stt = SpeechToText(model_size)
         self._initialize_state()
 
     def _initialize_state(self):
@@ -200,10 +95,11 @@ class RealTimeTranscribe:
         self.triggered = False
         self.recorded_frames = []
         self.prev_tail_audio = np.zeros(0, dtype='float32')
-        self.q_raw = queue.Queue()
-        self.q = queue.Queue()
+        self.q_frame_size_audio = queue.Queue()
+        self.q_segmented_audio = queue.Queue()
+        self.q_transcript = queue.Queue()
         self.lock = threading.Lock()
-        self.transcriber_thread = None
+        self.transcribe_thread = None
         self.vad_thread = None
         self.running = False
         self.transcript = []
@@ -219,11 +115,11 @@ class RealTimeTranscribe:
         while len(audio_data) >= self.frame_size:
             frame = audio_data[:self.frame_size]
             audio_data = audio_data[self.frame_size:]
-            self.q_raw.put(frame)
+            self.q_frame_size_audio.put(frame)
 
     def _vad_worker(self):
         while self.running:
-            frame = self.q_raw.get()
+            frame = self.q_frame_size_audio.get()
             if frame is None:
                 break
             is_speech = self.vad.is_speech(frame)
@@ -239,14 +135,59 @@ class RealTimeTranscribe:
                 if sum(1 for _, s in self.ring_buffer if not s) > 0.9 * self.ring_buffer.maxlen:
                     if self.recorded_frames:
                         segment = np.concatenate(self.recorded_frames)
-                        self.q.put(segment.copy())
+                        self.q_segmented_audio.put(segment.copy())
                     self.triggered = False
                     self.recorded_frames.clear()
                     self.ring_buffer.clear()
 
+    def _color_word(self, word, prob):
+        prob = max(0.0, min(1.0, prob))
+        if prob < 0.5:
+            r = 255
+            g = int(2 * prob * 255)
+        else:
+            r = int((1 - 2 * (prob - 0.5)) * 255)
+            g = 255
+        b = 0
+        return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
+
+    def format_and_display_transcription(self, result):
+        if not (isinstance(result, list) and result):
+            return
+        sentence = self.stt.extract_text(result)
+        text = self._format_output(result)
+        time_str = self._get_time_str()
+        output = f"[{time_str}] {text}"
+        self.transcript.append(sentence)
+        self._display(output, sentence)
+
+    def _format_output(self, result):
+        # Returns colored text for the transcription
+        return " ".join(self._color_word(i.text.strip(), i.probability) for i in result).strip()
+
+    def _get_time_str(self):
+        end = time.time()
+        elapsed = datetime.timedelta(seconds=end - self.start_time)
+        dt = datetime.datetime.min + elapsed
+        return dt.strftime("%M:%S.%f")[:-3]
+
+    def _display(self, output, sentence):
+        if self.translate_to and self.translator:
+            print(output, end=" ", flush=True)
+            threading.Thread(target=self._translate, args=(sentence,), daemon=True).start()
+        else:
+            print(output)
+
+    def _translate(self, sentence):
+        translate_start = time.time()
+        translated = self.translator.translate(sentence)
+        time.sleep(5)
+        translate_time = time.time() - translate_start
+        print(f"→ {translated} ({translate_time:.2f}s)")
+
     def _transcribe(self):
         while True:
-            segment = self.q.get()
+            segment = self.q_segmented_audio.get()
             if segment is None:
                 break
             full_segment = np.concatenate([self.prev_tail_audio, segment])
@@ -254,18 +195,14 @@ class RealTimeTranscribe:
             if processed_segment is None:
                 continue
             result = self.stt.transcribe(processed_segment)
-            output = self.stt.format_and_display_transcription(
-                result, self.transcript, self.start_time, self.translator, self.translate_to,
-            )
-            if output:
-                print(output)
+            self.format_and_display_transcription(result)
 
     def _stop(self):
         self.running = False
-        self.q.put(None)
-        self.q_raw.put(None)
-        if self.transcriber_thread is not None:
-            self.transcriber_thread.join()
+        self.q_segmented_audio.put(None)
+        self.q_frame_size_audio.put(None)
+        if self.transcribe_thread is not None:
+            self.transcribe_thread.join()
         if self.vad_thread is not None:
             self.vad_thread.join()
         if self.audio_file_path and self.full_recording_list:
@@ -274,13 +211,14 @@ class RealTimeTranscribe:
             print(f"Audio saved to {self.audio_file_path}")
 
     def run(self):
-        print(f"Real-time transcribe (Model: {self.stt.__class__.__name__} {self.model_size})... (Ctrl+C to stop)")
+        print(f"Real-time transcribe ({self.stt.model.__class__.__name__}: {self.model_size})... (Ctrl+C to stop)")
         self.running = True
         self.start_time = time.time()
-        self.transcriber_thread = threading.Thread(target=self._transcribe, daemon=True)
         self.vad_thread = threading.Thread(target=self._vad_worker, daemon=True)
-        self.transcriber_thread.start()
         self.vad_thread.start()
+        self.transcribe_thread = threading.Thread(target=self._transcribe, daemon=True)
+        self.transcribe_thread.start()
+
         try:
             with sd.InputStream(samplerate=self.sample_rate,
                                 channels=1,
@@ -311,9 +249,8 @@ class RealTimeTranscribe:
 
 if __name__ == "__main__":
     self = RealTimeTranscribe(audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
-                              model_size="small.en",
+                              model_size="large-v3-turbo-q5_0",
                               translate_to="Chinese",
-                              use_whispercpp=False,
                               )
 
     self.run()
