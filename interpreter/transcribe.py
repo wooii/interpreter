@@ -17,9 +17,10 @@ from interpreter import data_folder
 
 class VAD:
     """Voice activity detection"""
-    def __init__(self, frame_size=512, sample_rate=16000):
+    def __init__(self, frame_size=512, sample_rate=16000, speech_threshold=0.4):
         self.frame_size = frame_size
         self.sample_rate = sample_rate
+        self.speech_threshold = speech_threshold
         self.model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad',
                                        model='silero_vad',
                                        force_reload=False,
@@ -29,7 +30,7 @@ class VAD:
             return False
         frame_tensor = torch.from_numpy(frame).float()
         speech_prob = self.model(frame_tensor, self.sample_rate).item()
-        return speech_prob > 0.4
+        return speech_prob > self.speech_threshold
 
 
 class Translator:
@@ -82,10 +83,11 @@ class SpeechToText:
 
 
 class RealTimeTranscribe:
-    def __init__(self, audio_file_path=None, stt_model_size="small", translate_to="Chinese"):
+    def __init__(self, audio_file_path=None, stt_model_size="small", translate_to="Chinese", max_segment_duration=5.0):
         self.audio_file_path = audio_file_path
         self.stt_model_size = stt_model_size
         self.translate_to = translate_to
+        self.max_segment_duration = max_segment_duration
         self.sample_rate = 16000
         self.frame_size = 512
         self.vad = VAD(self.frame_size, self.sample_rate)
@@ -93,11 +95,14 @@ class RealTimeTranscribe:
         self.stt = SpeechToText(stt_model_size)
         self.stt_model_name = self.stt.model.__class__.__name__
         self._initialize_state()
+        # Calculate max frames based on the configurable duration
+        self.max_segment_frames = int(self.max_segment_duration * self.sample_rate / self.frame_size)
 
     def _initialize_state(self):
         self.ring_buffer = collections.deque(maxlen=20)
         self.triggered = False
         self.recorded_frames = []
+        self.recorded_frames_count = 0  # Track number of frames recorded
         self.prev_tail_audio = np.zeros(0, dtype='float32')
         self.q_for_vad = queue.Queue()
         self.q_for_transcription = queue.Queue()
@@ -137,15 +142,26 @@ class RealTimeTranscribe:
                     self.triggered = True
                     for f, _ in self.ring_buffer:
                         self.recorded_frames.append(f)
+                    self.recorded_frames_count = len(self.recorded_frames)
                     self.ring_buffer.clear()
             else:
                 self.recorded_frames.append(frame)
-                if sum(1 for _, s in self.ring_buffer if not s) > 0.9 * self.ring_buffer.maxlen:
+                self.recorded_frames_count += 1
+
+                # Check if we've reached maximum segment duration
+                max_duration_reached = self.recorded_frames_count >= self.max_segment_frames
+
+                # Check for silence (end of speech)
+                silence_detected = sum(1 for _, s in self.ring_buffer if not s) > 0.9 * self.ring_buffer.maxlen
+
+                # If either maximum duration reached or silence detected, process the segment
+                if max_duration_reached or silence_detected:
                     if self.recorded_frames:
                         segment = np.concatenate(self.recorded_frames)
                         self.q_for_transcription.put(segment.copy())
                     self.triggered = False
                     self.recorded_frames.clear()
+                    self.recorded_frames_count = 0
                     self.ring_buffer.clear()
 
     def _color_word(self, word, prob):
@@ -276,6 +292,7 @@ if __name__ == "__main__":
         audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
         stt_model_size="large-v3-turbo-q5_0",
         translate_to="Chinese",
+        max_segment_duration=10.0,
         )
 
     self.run()
