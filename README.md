@@ -1,47 +1,38 @@
-# Interpreter: Real-Time Meeting Assistant
+# Interpreter
 
-A real-time audio recording, transcription, and interpretation tool for meetings and live conversations. This project is designed for scenarios where speed and accuracy are critical, such as live interpretation or meeting environments.
+A real-time transcription assistant, with optional translation: records microphone audio, transcribes locally in real time, and optionally translates, with an online fallback — designed for scenarios where speed and accuracy are critical, such as meetings or live conversations.
 
 ## Key Features
-- Real-time audio recording and transcription with continuous listening
-- Speaker identification: print out the words received and indicate who is speaking
-- Option to use either advanced speech recognition APIs (OpenAI Whisper or Google Speech Recognition) or local models for transcription
-- Highlight keywords and uncommon words in the transcript
-- Translate highlighted/uncommon words for better understanding
-- Designed for live interpretation, meeting assistance, and second language conversations
+- Real-time continuous local transcription, with per-word confidence color coding
+- Optional local translation
+- Online fallback for both transcription and translation
 
 ## Requirements
-- Python 3.8+
-- [openai-whisper](https://github.com/openai/whisper)
-- Other dependencies listed in `pyproject.toml`
+- [uv](https://docs.astral.sh/uv/)
+- A working microphone
+- API keys for online fallback
 
-## Installation
-1. Open Terminal and navigate to the directory containing `pyproject.toml`:
-   ```sh
-   cd /Users/chen/Library/CloudStorage/Dropbox/Code/py/ai/interpreter
-   ```
-2. Install in development mode:
-   ```sh
-   pip install -e .
-   ```
+## Setup
 
-## Usage
-- To run the real-time interpreter:
-  ```sh
-  python interpreter/main.py
-  ```
-- To compare different speech recognition models:
-  ```sh
-  python interpreter/model_comparison.py
-  ```
+The project is uv-managed. Create (or re-sync after dependency changes) the host venv:
+
+```bash
+uv sync
+```
+
+AI agents run in a Linux container with a separate `.venv-container` — see `AGENTS.md`.
+
+## Running
+
+Run from the project root (where `pyproject.toml` is), e.g. the real-time transcription entrypoint:
+
+```bash
+uv run python -m interpreter.transcribe
+```
 
 ## Roadmap
-- [x] Implement real-time, continuous audio recording and streaming
-- [x] Integrate Whisper API/local model, and evaluate other advanced models
-- [ ] Add speaker identification and display who is talking
-- [ ] Highlight and translate keywords/uncommon words in real time
-- [ ] Build user interface (optional)
-- [ ] Add Whisper model finetuning (future)
+
+See `PLAN.md` for the modernization plan.
 
 ## License
 MIT
