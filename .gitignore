@@ -1,9 +1,37 @@
-__pycache__/
-*.pyc
-*.egg-info/
+# --- OS ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+
+# --- Editors ---
 .vscode/
 .spyproject/
-.DS_Store
-whisper_finetuned
 
 
+# --- Data ---
+/data/
+
+
+# --- Secrets ---
+.env
+
+
+# --- Python ---
+# Generated
+__pycache__/
+*.py[codz]
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv-container/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+
+# --- R ---
+# Generated
+.Rhistory
