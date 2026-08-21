@@ -1,0 +1,72 @@
+# Configuration file for `prek`.
+# One-time setup:
+# uv run prek install                        # install commit-time hooks
+# uv run prek install --hook-type pre-push   # install push-time hooks
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  {
+    id = "trailing-whitespace",
+    stages = ["pre-commit"]
+  },
+  {
+    id = "end-of-file-fixer",
+    stages = ["pre-commit"]
+  },
+  {
+    id = "check-yaml",
+    stages = ["pre-commit"]
+  },
+  {
+    id = "check-toml",
+    stages = ["pre-commit"]
+  },
+  {
+    id = "check-merge-conflict",
+    stages = ["pre-commit"]
+  },
+  {
+    id = "check-added-large-files",
+    args = ["--maxkb=1000"],
+    stages = ["pre-commit"]
+  }
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "ruff-check",
+    name = "ruff check --fix",
+    entry = "uv run --no-sync ruff check --fix",
+    language = "system",
+    types = ["python"],
+    stages = ["pre-commit"]
+  },
+  {
+    id = "ruff-format",
+    name = "ruff format",
+    entry = "uv run --no-sync ruff format",
+    language = "system",
+    types = ["python"],
+    stages = ["pre-commit"]
+  },
+  {
+    id = "ty-check",
+    name = "ty check",
+    entry = "uv run --no-sync ty check",
+    language = "system",
+    types = ["python"],
+    pass_filenames = false,
+    stages = ["pre-push"]
+  },
+  {
+    id = "pytest",
+    name = "pytest",
+    entry = "uv run --no-sync pytest",
+    language = "system",
+    pass_filenames = false,
+    stages = ["pre-push"]
+  }
+]
