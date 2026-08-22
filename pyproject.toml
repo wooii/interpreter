@@ -1,35 +1,50 @@
-# Created on Fri Jun  7 08:44:53 2024
-# @author: Chenfeng Chen
-
-
 [project]
 name = "interpreter"
-description = "A interpreter"
-version = "0.1"
+version = "0.2.0"
+description = "Real-time meeting transcription and interpretation assistant"
 readme = "README.md"
-license = {text = "MIT Licence"}
-authors = [{name = "Chenfeng Chen"}]
-keywords = ["ai", "interpreter"]
-requires-python = ">=3.10"
+authors = [{ name = "Chenfeng Chen" }]
+requires-python = ">=3.14"
+license = { text = "MIT" }
+keywords = ["ai", "interpreter", "transcription", "stt", "translation"]
 dependencies = [
-    "openai-whisper",
-    "openai",
-    "matplotlib",
-    "wavio",
-    "sounddevice",
-    "soundfile",
-    "gtts",
-    "translate",
-    "evaluate",
-    "transformers",
-    "silero-vad",
+    "faster-whisper>=1.2.1",
+    "jiwer>=4.0.0",
+    "matplotlib>=3.11.1",
+    "noisereduce>=3.0.3",
+    "numpy>=2.5.2",
+    "ollama>=0.6.2",
+    "openai-whisper>=20250625",
+    "pywhispercpp>=1.5.0",
+    "sounddevice>=0.5.6",
+    "soundfile>=0.14.0",
+    "torch>=2.13.0",
+    "torchaudio>=2.11.0",
+    "wavio>=0.0.9",
 ]
 
-
-[tool.setuptools.packages.find]
-include = ["interpreter"]
-
-
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.11.28,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "prek>=0.4.11",
+    "pytest>=9.1.1",
+    "ruff>=0.16.0",
+    "ty>=0.0.63",
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.pytest]
+testpaths = ["tests"]

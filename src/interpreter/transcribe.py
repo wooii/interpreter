@@ -1,30 +1,35 @@
-import threading
-import queue
-import time
-import datetime
 import collections
-import torch
-import ollama
-import re
+import datetime
+import queue
+import threading
+import time
+
+import noisereduce as nr
 import numpy as np
+import ollama
 import sounddevice as sd
 import soundfile as sf
-import noisereduce as nr
-from jiwer import wer, cer
+import torch
+from jiwer import cer, wer
+
+from interpreter import DATA_DIR
 from interpreter.whispercpp import WhisperCppModel
-from interpreter import data_folder
 
 
 class VAD:
     """Voice activity detection"""
+
     def __init__(self, frame_size=512, sample_rate=16000, speech_threshold=0.4):
         self.frame_size = frame_size
         self.sample_rate = sample_rate
         self.speech_threshold = speech_threshold
-        self.model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad',
-                                       model='silero_vad',
-                                       force_reload=False,
-                                       onnx=False)
+        self.model, _ = torch.hub.load(
+            repo_or_dir="snakers4/silero-vad",
+            model="silero_vad",
+            force_reload=False,
+            onnx=False,
+        )
+
     def is_speech(self, frame):
         if len(frame) != self.frame_size:
             return False
@@ -34,46 +39,53 @@ class VAD:
 
 
 class Translator:
-    def __init__(self, model="qwen3:0.6b", target_lang="Chinese"):
+    def __init__(self, model="qwen3.5:0.8b", target_lang="Chinese"):
         self.model = model
         self.target_lang = target_lang
+
     def translate(self, text: str) -> str:
         if not text.strip():
             return ""
-        prompt = f"Translate to {self.target_lang}:\n{text} /no_think"
+        prompt = f"Translate to {self.target_lang}:\n{text}"
         try:
-            response = ollama.generate(model=self.model, prompt=prompt)
-            translated = response["response"].strip()
-            translated = re.sub(r'<think>.*?</think>', '', translated, flags=re.DOTALL)
-            return translated.strip()
-        except Exception as e:
+            response = ollama.chat(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                think=False,
+            )
+            return response["message"]["content"].strip()
+        except (ollama.ResponseError, ConnectionError) as e:
             return f"[Translation error: {e}]"
 
+
 def process_audio_segment(full_segment, sample_rate):
-    start = time.time()
+    # start = time.time()
     if np.sqrt(np.mean(full_segment**2)) < 0.001:
         return None
     max_val = np.max(np.abs(full_segment)) + 1e-8
     full_segment = full_segment / max_val
     full_segment = nr.reduce_noise(y=full_segment, sr=sample_rate)
-    print(f"    [Audio processing time: {time.time() - start:.4f}s]", flush=True)
+    # print(f"    [Audio processing time: {time.time() - start:.4f}s]", flush=True)
     return full_segment
 
 
 class SpeechToText:
     def __init__(self, model_size):
-        self.model = WhisperCppModel(model_size,
-                                     token_timestamps=True,
-                                     max_len=1,
-                                     split_on_word=True,
-                                     #translate=False,
-                                     #language='chinese',
-                                     print_progress=False)
+        self.model = WhisperCppModel(
+            model_size,
+            token_timestamps=True,
+            max_len=1,
+            split_on_word=True,
+            # translate=False,
+            # language='chinese',
+            print_progress=False,
+        )
 
     def transcribe(self, audio: np.ndarray):
-        return self.model.transcribe(media=audio.astype(np.float32),
-                                     temperature=0.0,
-                                     )
+        return self.model.transcribe(
+            media=audio.astype(np.float32),
+            temperature=0.0,
+        )
 
     def transcribe_file(self, file_path: str):
         return self.model.transcribe(str(file_path))
@@ -83,7 +95,13 @@ class SpeechToText:
 
 
 class RealTimeTranscribe:
-    def __init__(self, audio_file_path=None, stt_model_size="small", translate_to="Chinese", max_segment_duration=5.0):
+    def __init__(
+        self,
+        audio_file_path=None,
+        stt_model_size="small",
+        translate_to="Chinese",
+        max_segment_duration=5.0,
+    ):
         self.audio_file_path = audio_file_path
         self.stt_model_size = stt_model_size
         self.translate_to = translate_to
@@ -96,14 +114,17 @@ class RealTimeTranscribe:
         self.stt_model_name = self.stt.model.__class__.__name__
         self._initialize_state()
         # Calculate max frames based on the configurable duration
-        self.max_segment_frames = int(self.max_segment_duration * self.sample_rate / self.frame_size)
+        self.max_segment_frames = int(
+            self.max_segment_duration * self.sample_rate / self.frame_size
+        )
 
     def _initialize_state(self):
-        self.ring_buffer = collections.deque(maxlen=20)
+        self.ring_buffer_maxlen = 20
+        self.ring_buffer = collections.deque(maxlen=self.ring_buffer_maxlen)
         self.triggered = False
         self.recorded_frames = []
         self.recorded_frames_count = 0  # Track number of frames recorded
-        self.prev_tail_audio = np.zeros(0, dtype='float32')
+        self.prev_tail_audio = np.zeros(0, dtype="float32")
         self.q_for_vad = queue.Queue()
         self.q_for_transcription = queue.Queue()
         self.q_for_translation = queue.Queue()
@@ -123,8 +144,8 @@ class RealTimeTranscribe:
         if self.audio_file_path:
             self.full_recording_list.append(audio_data)
         while len(audio_data) >= self.frame_size:
-            frame = audio_data[:self.frame_size]
-            audio_data = audio_data[self.frame_size:]
+            frame = audio_data[: self.frame_size]
+            audio_data = audio_data[self.frame_size :]
             self.q_for_vad.put(frame)
 
     def _vad_worker(self):
@@ -138,7 +159,7 @@ class RealTimeTranscribe:
             is_speech = self.vad.is_speech(frame)
             self.ring_buffer.append((frame, is_speech))
             if not self.triggered:
-                if sum(s for _, s in self.ring_buffer) > 0.5 * self.ring_buffer.maxlen:
+                if sum(s for _, s in self.ring_buffer) > 0.4 * self.ring_buffer_maxlen:
                     self.triggered = True
                     for f, _ in self.ring_buffer:
                         self.recorded_frames.append(f)
@@ -149,10 +170,15 @@ class RealTimeTranscribe:
                 self.recorded_frames_count += 1
 
                 # Check if we've reached maximum segment duration
-                max_duration_reached = self.recorded_frames_count >= self.max_segment_frames
+                max_duration_reached = (
+                    self.recorded_frames_count >= self.max_segment_frames
+                )
 
                 # Check for silence (end of speech)
-                silence_detected = sum(1 for _, s in self.ring_buffer if not s) > 0.9 * self.ring_buffer.maxlen
+                silence_detected = (
+                    sum(1 for _, s in self.ring_buffer if not s)
+                    > 0.8 * self.ring_buffer_maxlen
+                )
 
                 # If either maximum duration reached or silence detected, process the segment
                 if max_duration_reached or silence_detected:
@@ -184,17 +210,17 @@ class RealTimeTranscribe:
         self.transcript.append(transcript)
         print(f"[{time_str}] {formated_transcript}", flush=True)
         if self.translator:
-            self.q_for_translation.put((transcript))
+            self.q_for_translation.put(transcript)
 
     def _format_transcript(self, result):
         # Returns colored text for the transcription
-        return " ".join(self._color_word(i.text.strip(), i.probability) for i in result).strip()
+        return " ".join(
+            self._color_word(i.text.strip(), i.probability) for i in result
+        ).strip()
 
     def _get_time_str(self):
-        end = time.time()
-        elapsed = datetime.timedelta(seconds=end - self.start_time)
-        dt = datetime.datetime.min + elapsed
-        return dt.strftime("%M:%S.%f")[:-3]
+        elapsed = time.time() - self.start_time
+        return f"{int(elapsed // 60):02d}:{elapsed % 60:06.3f}"
 
     def _transcription_worker(self):
         while self.running:
@@ -208,13 +234,15 @@ class RealTimeTranscribe:
             processed_segment = process_audio_segment(full_segment, self.sample_rate)
             if processed_segment is None:
                 continue
-            start_time = time.time()
+            # start_time = time.time()
             result = self.stt.transcribe(processed_segment)
-            transcription_time = time.time() - start_time
+            # transcription_time = time.time() - start_time
             self._format_and_display_transcription(result)
-            print(f"    [Transcription time: {transcription_time:.4f}s]", flush=True)
+            # print(f"    [Transcription time: {transcription_time:.4f}s]", flush=True)
 
     def _translation_worker(self):
+        if self.translator is None:
+            return
         while self.running:
             try:
                 transcript = self.q_for_translation.get(timeout=0.1)
@@ -245,26 +273,34 @@ class RealTimeTranscribe:
             print(f"Audio saved to {self.audio_file_path}")
 
     def run(self):
-        print(f"Real-time transcribe... (Ctrl+C to stop)")
+        print("Real-time transcribe... (Ctrl+C to stop)")
         print(f"Speech-to-text model: {self.stt_model_name} ({self.stt_model_size})")
         if self.translator:
-            print(f"Translation model: {self.translator.model} → {self.translator.target_lang}")
+            print(
+                f"Translation model: {self.translator.model} → {self.translator.target_lang}"
+            )
         self.running = True
         self.start_time = time.time()
         self.vad_thread = threading.Thread(target=self._vad_worker, daemon=True)
         self.vad_thread.start()
-        self.transcription_thread = threading.Thread(target=self._transcription_worker, daemon=True)
+        self.transcription_thread = threading.Thread(
+            target=self._transcription_worker, daemon=True
+        )
         self.transcription_thread.start()
         if self.translator:
-            self.translation_thread = threading.Thread(target=self._translation_worker, daemon=True)
+            self.translation_thread = threading.Thread(
+                target=self._translation_worker, daemon=True
+            )
             self.translation_thread.start()
 
         try:
-            with sd.InputStream(samplerate=self.sample_rate,
-                                channels=1,
-                                dtype='float32',
-                                callback=self._audio_callback,
-                                blocksize=self.frame_size):
+            with sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype="float32",
+                callback=self._audio_callback,
+                blocksize=self.frame_size,
+            ):
                 while self.running:
                     time.sleep(0.1)
         except KeyboardInterrupt:
@@ -278,8 +314,12 @@ class RealTimeTranscribe:
         result = self.stt.transcribe_file(str(self.audio_file_path))
         self.reference_transcript = self.stt.extract_text(result)
         self.realtime_transcript = " ".join(self.transcript).strip()
-        wer_error = wer(self.reference_transcript.lower(), self.realtime_transcript.lower())
-        cer_error = cer(self.reference_transcript.lower(), self.realtime_transcript.lower())
+        wer_error = wer(
+            self.reference_transcript.lower(), self.realtime_transcript.lower()
+        )
+        cer_error = cer(
+            self.reference_transcript.lower(), self.realtime_transcript.lower()
+        )
         print(f"Word Error Rate (WER): {wer_error:.2%}")
         print(f"Character Error Rate (CER): {cer_error:.2%}")
         print(f"Reference Transcript: {self.reference_transcript}")
@@ -288,12 +328,14 @@ class RealTimeTranscribe:
 
 
 if __name__ == "__main__":
+    timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+
     self = RealTimeTranscribe(
-        audio_file_path=data_folder / "interpreter" / "streaming_audio.wav",
+        audio_file_path=DATA_DIR / f"streaming_audio_{timestamp}.wav",
         stt_model_size="large-v3-turbo-q5_0",
         translate_to="Chinese",
         max_segment_duration=10.0,
-        )
+    )
 
     self.run()
 

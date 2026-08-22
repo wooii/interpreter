@@ -1,21 +1,25 @@
-from pywhispercpp.model import Model, Segment
-from time import time
-from pathlib import Path
-from typing import Union, Callable, List
-import _pywhispercpp as pw
-import numpy as np
 import importlib.metadata
 import logging
-from interpreter import data_folder
+from collections.abc import Callable
+from pathlib import Path
+from time import time
+from typing import Any
 
-__version__ = importlib.metadata.version('pywhispercpp')
+import _pywhispercpp as pw  # ty: ignore[unresolved-import]
+import numpy as np
+from pywhispercpp.model import Model, Segment
+
+from interpreter import DATA_DIR
+
+__version__ = importlib.metadata.version("pywhispercpp")
 
 logger = logging.getLogger(__name__)
 
 
 class MySegment(Segment):
     """Add per-segment average token probability to Segment."""
-    def __init__(self, t0: int, t1: int, text: str, probability: float = 0.0):
+
+    def __init__(self, t0: int, t1: int, text: str, probability: float = np.nan):
         """
         :param t0: start time
         :param t1: end time
@@ -33,8 +37,12 @@ class MySegment(Segment):
 
 class WhisperCppModel(Model):
     """Wrapper around pywhispercpp Model with probability-aware segments."""
+
+    _ctx: Any
+    _params: Any
+
     @staticmethod
-    def _get_segments(ctx, start: int, end: int) -> List[Segment]:
+    def _get_segments(ctx, start: int, end: int) -> list[Segment]:
         """
         Helper function to get generated segments between `start` and `end`
 
@@ -44,13 +52,15 @@ class WhisperCppModel(Model):
         :return: list of segments
         """
         n = pw.whisper_full_n_segments(ctx)
-        assert end <= n, f"{end} > {n}: `End` index must be less or equal than the total number of segments"
+        assert end <= n, (
+            f"{end} > {n}: `End` index must be less or equal than the total number of segments"
+        )
         res = []
         for i in range(start, end):
             t0 = pw.whisper_full_get_segment_t0(ctx, i)
             t1 = pw.whisper_full_get_segment_t1(ctx, i)
             bytes = pw.whisper_full_get_segment_text(ctx, i)
-            text = bytes.decode('utf-8', errors='replace')
+            text = bytes.decode("utf-8", errors="replace")
             n_tokens = pw.whisper_full_n_tokens(ctx, i)
             if n_tokens == 1:
                 avg_prob = pw.whisper_full_get_token_p(ctx, i, 0)
@@ -60,15 +70,20 @@ class WhisperCppModel(Model):
                     total_logprob += np.log(pw.whisper_full_get_token_p(ctx, i, j))
                 avg_prob = np.exp(total_logprob / n_tokens)
             else:
-                avg_prob = 0.0
-            res.append(MySegment(t0, t1, text.strip(), probability=np.float32(avg_prob)))
+                avg_prob = np.nan
+            res.append(
+                MySegment(t0, t1, text.strip(), probability=float(np.float32(avg_prob)))
+            )
         return res
 
-    def transcribe(self,
-                   media: Union[str, np.ndarray],
-                   n_processors: int = None,
-                   new_segment_callback: Callable[[Segment], None] = None,
-                   **params) -> List[Segment]:
+    def transcribe(
+        self,
+        media: str | np.ndarray,
+        n_processors: int | None = None,
+        new_segment_callback: Callable[[Segment], None] | None = None,
+        abort_callback: Callable[[], bool] | None = None,
+        **params,
+    ) -> list[Segment]:
         """
         Transcribes the media provided as input and returns list of `Segment` objects.
         Accepts a media_file path (audio/video) or a raw numpy array.
@@ -78,23 +93,28 @@ class WhisperCppModel(Model):
                              binding to whisper.cpp/whisper_full_parallel
                              > Split the input audio in chunks and process each chunk separately using whisper_full()
         :param new_segment_callback: callback function that will be called when a new segment is generated
+        :param abort_callback: callback function that will be called to check if transcription should be aborted
         :param params: keyword arguments for different whisper.cpp parameters, see ::: constants.PARAMS_SCHEMA
 
         :return: List of transcription segments
         """
-        if type(media) is np.ndarray:
+        if isinstance(media, np.ndarray):
             audio = media
         else:
             if not Path(media).exists():
                 raise FileNotFoundError(media)
             audio = self._load_audio(media)
         # update params if any
-        self._set_params(params)
+        self._set_params(params)  # ty: ignore[unresolved-attribute]
 
         # setting up callback
         if new_segment_callback:
             WhisperCppModel._new_segment_callback = new_segment_callback
-            pw.assign_new_segment_callback(self._params, WhisperCppModel.__call_new_segment_callback)
+            pw.assign_new_segment_callback(
+                self._params, WhisperCppModel.__call_new_segment_callback
+            )
+
+        pw.assign_abort_callback(self._params, abort_callback)
 
         # run inference
         start_time = time()
@@ -104,7 +124,7 @@ class WhisperCppModel(Model):
         logger.info(f"Inference time: {end_time - start_time:.3f} s")
         return res
 
-    def _transcribe(self, audio: np.ndarray, n_processors: int = None):
+    def _transcribe(self, audio: np.ndarray, n_processors: int | None = None):
         """
         Private method to call the whisper.cpp/whisper_full function
 
@@ -114,7 +134,9 @@ class WhisperCppModel(Model):
         """
 
         if n_processors:
-            pw.whisper_full_parallel(self._ctx, self._params, audio, audio.size, n_processors)
+            pw.whisper_full_parallel(
+                self._ctx, self._params, audio, audio.size, n_processors
+            )
         else:
             pw.whisper_full(self._ctx, self._params, audio, audio.size)
         n = pw.whisper_full_n_segments(self._ctx)
@@ -134,22 +156,27 @@ class WhisperCppModel(Model):
         start = n - n_new
         res = WhisperCppModel._get_segments(ctx, start, n)
         for segment in res:
-            WhisperCppModel._new_segment_callback(segment)
+            if WhisperCppModel._new_segment_callback is not None:
+                WhisperCppModel._new_segment_callback(segment)
 
 
 if __name__ == "__main__":
-    model = WhisperCppModel("large-v3-turbo-q5_0",
-                    token_timestamps=True,
-                    max_len=1,
-                    split_on_word=True,
-                    print_progress=False,
-                    )
-    audio_path = data_folder / 'interpreter'/ "comparison_recording.wav"
+    model = WhisperCppModel(
+        "large-v3-turbo-q5_0",
+        token_timestamps=True,
+        max_len=1,
+        split_on_word=True,
+        print_progress=False,
+        translate=False,
+        # language='auto',
+    )
+    audio_path = DATA_DIR / "comparison_recording.wav"
     start = time()
-    output =model.transcribe(str(audio_path),
-                             temperature=0.0,
-                             )
+    output = model.transcribe(
+        str(audio_path),
+        temperature=0.0,
+    )
     end = time()
-    print(end-start)
+    print(end - start)
 
-
+    model.get_params_schema()
