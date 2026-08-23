@@ -1,16 +1,26 @@
 # Interpreter
 
-A real-time transcription assistant, with optional translation: records microphone audio, transcribes locally in real time, and optionally translates, with an online fallback — designed for scenarios where speed and accuracy are critical, such as meetings or live conversations.
+A real-time, fully local transcription assistant with optional translation — built for meetings and live conversations where speed, privacy, and accuracy matter.
 
 ## Key Features
+
 - Real-time continuous local transcription, with per-word confidence color coding
-- Optional local translation
-- Online fallback for both transcription and translation
+- Optional live local translation
+- Mixed language (zh/en) dictation
+
+## Modes
+
+One pipeline (mic → VAD → STT → optional translation), two config-driven modes:
+
+| Mode | Who speaks | What comes out |
+|------|------------|----------------|
+| **listen** | Others (English) | English transcript + Chinese translation |
+| **dictate** | Self (zh/en mixed) | Clean mixed-language dictation |
 
 ## Requirements
+
 - [uv](https://docs.astral.sh/uv/)
 - A working microphone
-- API keys for online fallback
 
 ## Setup
 
@@ -29,6 +39,8 @@ Run from the project root (where `pyproject.toml` is), e.g. the real-time transc
 ```bash
 uv run python -m interpreter.transcribe
 ```
+
+The first run downloads the whisper.cpp model weights (e.g. `large-v3-turbo-q5_0`, several GB) via pywhispercpp.
 
 ## Roadmap
 
