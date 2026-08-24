@@ -31,24 +31,29 @@ from interpreter.translate import TRANSLATE_MODEL
 
 MAX_SEGMENT_DURATION = 10.0
 
+
 def _run_live(
     *,
     stt_model: str,
     translate: bool,
     audio_file: Path | None,
     mode: str,
-    plain_output: bool = False,
+    clean: bool = False,
 ) -> None:
     if audio_file is None:
         timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
         audio_file = DATA_DIR / f"{mode}_{timestamp}.wav"
+    print(
+        "Loading models (first run downloads weights from Hugging Face)...",
+        flush=True,
+    )
     rtt = RealTimeTranscribe(
         audio_file_path=audio_file,
         stt_model=stt_model,
         translate_model=TRANSLATE_MODEL,
         translate_to="Chinese" if translate else None,
         max_segment_duration=MAX_SEGMENT_DURATION,
-        plain_output=plain_output,
+        clean=clean,
     )
     rtt.run()
     rtt.evaluate()
@@ -124,7 +129,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             translate=args.translate,
             audio_file=args.audio_file,
             mode="dictate",
-            plain_output=True,
+            clean=True,
         )
 
 

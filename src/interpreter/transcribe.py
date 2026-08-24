@@ -33,7 +33,7 @@ Standalone use (no mic): transcribe a 16 kHz mono file or array directly
     print(Translator().translate(text))         # opus-mt-en-zh -> Chinese
 
 CLI: `uv run python -m interpreter listen|dictate` runs live dictation (see
-__main__.py). Model picks follow the Phase 1 conclusion (docs/benchmark.md);
+__main__.py). Model picks follow the Phase 1 conclusion (_archive/benchmark-2026-08-24.md);
 weights download anonymously from HF on first use.
 """
 
@@ -68,6 +68,93 @@ def _contains_cjk(text: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
 
+def _is_cjk_char(ch: str) -> bool:
+    return "\u4e00" <= ch <= "\u9fff"
+
+
+def _join_text_parts(parts, force_space=False) -> str:
+    """Join transcript chunks. By default a space is inserted only between two
+    non-CJK chars — English words need one, but no space between CJK (or
+    CJK/latin) chars. `force_space=True` (display/copy output) separates every
+    chunk with a space — dictation has no punctuation, so segment boundaries
+    need at least that. Metrics keep the unspaced join (spaces would inflate
+    CER against the unspaced zh reference)."""
+    out = ""
+    for p in parts:
+        if not p:
+            continue
+        if out:
+            if force_space:
+                out += " "
+            else:
+                lc = out[-1]
+                fc = p[0]
+                if (
+                    not lc.isspace()
+                    and not fc.isspace()
+                    and not _is_cjk_char(lc)
+                    and not _is_cjk_char(fc)
+                ):
+                    out += " "
+        out += p
+    return out
+
+
+def _norm(text: str) -> str:
+    """Whitespace-collapsed, lowercased view for stability comparison."""
+    return "".join(ch for ch in text.lower() if not ch.isspace())
+
+
+def _stable_prefix(full: str, prefix: str) -> bool:
+    """True when `prefix` is a stable prefix of `full` — i.e. appending the
+    new segment did not change the earlier text. For whitespace-segmented text
+    (English) compare at word boundaries so a mid-word re-segmentation like
+    abc|def -> abcdef keeps the window open; for CJK (no word boundaries) a
+    character-prefix is enough because committing a char prefix + tail
+    reconstructs the full text on concatenation."""
+    if not _contains_cjk(prefix):
+        pw = prefix.split()
+        fw = full.split()
+        return (
+            bool(pw)
+            and len(fw) >= len(pw)
+            and [w.lower() for w in fw[: len(pw)]] == [w.lower() for w in pw]
+        )
+    pn = _norm(prefix)
+    return bool(pn) and _norm(full).startswith(pn)
+
+
+def _strip_prefix(full: str, prefix: str) -> str:
+    """Suffix of `full` after `prefix` (used only when `_stable_prefix`
+    holds)."""
+    if not _contains_cjk(prefix):
+        return " ".join(full.split()[len(prefix.split()) :])
+    pn = _norm(prefix)
+    consumed = 0
+    i = 0
+    n = len(full)
+    while consumed < len(pn) and i < n:
+        ch = full[i]
+        if ch.isspace():
+            i += 1
+            continue
+        consumed += 1
+        i += 1
+    return full[i:].lstrip()
+
+
+def _chunk_punct(text: str) -> str:
+    """Sentence-ending punctuation for dictation. SenseVoice emits none.
+    English chunks get a period; Chinese chunks get none — the space in the
+    join separates zh sentences (user preference: zh reads better space-only).
+    Empty when the chunk already ends in punctuation (parakeet en-only)."""
+    if not text or text[-1] in "。，,.!?！？:：;；":
+        return ""
+    if _contains_cjk(text):
+        return ""
+    return "."
+
+
 def _sentence_case(text: str) -> str:
     """Capitalize the first letter found in a segment; leave the rest lowercase."""
     for i, ch in enumerate(text):
@@ -80,6 +167,7 @@ def _normalize_sensevoice_case(text: str) -> str:
     """SenseVoice emits English in ALL CAPS (a model artifact; parakeet and the
     Chinese portions are unaffected) — lowercase and sentence-case each segment."""
     return _sentence_case(text.lower())
+
 
 MODELS_DIR = DATA_DIR / "benchmark" / "transcribe" / "models"
 
@@ -122,7 +210,7 @@ def _download_model_files(name: str) -> None:
 
 def _ensure_onnxruntime_dylib() -> None:
     """macOS only: sherpa-onnx wheels don't bundle onnxruntime — dlopen of
-    `@rpath/libonnxruntime.<ver>.dylib` fails (docs/benchmark.md). Copy the
+    `@rpath/libonnxruntime.<ver>.dylib` fails (_archive/benchmark-2026-08-24.md). Copy the
     dylibs from the installed onnxruntime package into the sherpa package's
     lib dir — the first @rpath search location. dyld reads DYLD_* at exec
     time, so a runtime env tweak can't fix this."""
@@ -145,6 +233,28 @@ def _ensure_onnxruntime_dylib() -> None:
         pass
 
 
+def _load_silero_vad():
+    """Silero VAD weights. `torch.hub.load` clones the GitHub repo and imports
+    its utils even when cached (slow, needs git, pulls in torchaudio) — load
+    the cached TorchScript file directly when present, falling back to
+    torch.hub for the first fetch."""
+    hub_dir = Path(torch.hub.get_dir())
+    for repo_dir in sorted(hub_dir.glob("snakers4_silero-vad*")):
+        pt = repo_dir / "silero_vad.pt"
+        if pt.is_file():
+            model = torch.jit.load(str(pt))
+            model.eval()
+            return model
+    model, _ = torch.hub.load(
+        repo_or_dir="snakers4/silero-vad",
+        model="silero_vad",
+        force_reload=False,
+        onnx=False,
+        trust_repo=True,
+    )
+    return model
+
+
 class VAD:
     """Voice activity detection"""
 
@@ -152,13 +262,7 @@ class VAD:
         self.frame_size = frame_size
         self.sample_rate = sample_rate
         self.speech_threshold = speech_threshold
-        self.model, _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            force_reload=False,
-            onnx=False,
-            trust_repo=True,
-        )
+        self.model = _load_silero_vad()
 
     def is_speech(self, frame):
         if len(frame) != self.frame_size:
@@ -170,7 +274,7 @@ class VAD:
 
 class SherpaSegment:
     """Minimal segment object for the display layer (`.text`, `.probability`,
-    `.t0`, `.t1`). Sherpa exposes no per-token log-probs for SenseVoice, so
+    `.word_probs`). Sherpa exposes no per-token log-probs for SenseVoice, so
     its `probability` is 1.0; transducer models (parakeet) expose `tokens` +
     `ys_log_probs`, which `_word_probs_from_result` groups into `word_probs` —
     (word, prob) pairs the real-time display colors per word."""
@@ -179,14 +283,10 @@ class SherpaSegment:
         self,
         text: str,
         probability: float = 1.0,
-        t0: float = 0.0,
-        t1: float = 0.0,
         word_probs: list[tuple[str, float]] | None = None,
     ) -> None:
         self.text = text
         self.probability = probability
-        self.t0 = t0
-        self.t1 = t1
         self.word_probs = word_probs
 
 
@@ -231,7 +331,7 @@ def _word_probs_from_result(result: Any) -> list[tuple[str, float]] | None:
 class SherpaStt:
     """Offline sherpa-onnx recognizer over raw 16 kHz mono float32 audio.
 
-    Model choice (docs/benchmark.md, 2026-08-24): en-only ->
+    Model choice (_archive/benchmark-2026-08-24.md, 2026-08-24): en-only ->
     parakeet-tdt-0.6b-v2, mixed -> sensevoice; both sherpa-onnx int8
     (whisper.cpp/Moonshine dropped). Weights download anonymously from HF.
     """
@@ -270,20 +370,18 @@ class SherpaStt:
 
 
 def process_audio_segment(full_segment, sample_rate):
-    # start = time.time()
     if np.sqrt(np.mean(full_segment**2)) < 0.001:
         return None
     max_val = np.max(np.abs(full_segment)) + 1e-8
     full_segment = full_segment / max_val
     full_segment = nr.reduce_noise(y=full_segment, sr=sample_rate)
-    # print(f"    [Audio processing time: {time.time() - start:.4f}s]", flush=True)
     return full_segment
 
 
 class SpeechToText:
-    """STT backend dispatch — Phase 1 model-selection winners (docs/benchmark.md).
+    """STT backend dispatch — Phase 1 model-selection winners (_archive/benchmark-2026-08-24.md).
     Sherpa-onnx int8 only since 2026-08-24 (whisper.cpp and Moonshine both
-    dropped — see docs/benchmark.md for the reasons).
+    dropped — see _archive/benchmark-2026-08-24.md for the reasons).
 
     model_name:
       - "sensevoice"            product default (sherpa int8; dictate/multilingual winner)
@@ -292,7 +390,7 @@ class SpeechToText:
     Per-word confidence coloring: the sherpa transducer (parakeet) exposes
     per-token log-probs, grouped into word probs in _word_probs_from_result.
     SenseVoice exposes no per-token scores in sherpa-onnx 1.13.0 — its
-    output is uncolored (uniform), a known limitation (docs/benchmark.md).
+    output is uncolored (uniform), a known limitation (_archive/benchmark-2026-08-24.md).
     """
 
     def __init__(self, model_name):
@@ -321,22 +419,18 @@ class RealTimeTranscribe:
         translate_model="opus-mt-en-zh",
         translate_to="Chinese",
         max_segment_duration=5.0,
-        plain_output=False,
+        clean=False,
+        max_window_seconds=60.0,
     ):
         self.audio_file_path = audio_file_path
-        self.stt_model = stt_model
-        self.translate_to = translate_to
-        self.plain_output = plain_output
+        self.clean = clean
+        self.max_window_seconds = max_window_seconds
         self.max_segment_duration = max_segment_duration
         self.sample_rate = 16000
         self.frame_size = 512
-        self.vad = VAD(self.frame_size, self.sample_rate)
-        self.translator = (
-            Translator(model=translate_model, target_lang=translate_to)
-            if translate_to
-            else None
+        self.vad, self.translator, self.stt = self._load_models(
+            stt_model, translate_model, translate_to
         )
-        self.stt = SpeechToText(stt_model)
         self.stt_model_name = self.stt.model_name
         self._initialize_state()
         # Calculate max frames based on the configurable duration
@@ -344,17 +438,58 @@ class RealTimeTranscribe:
             self.max_segment_duration * self.sample_rate / self.frame_size
         )
 
+    def _load_models(self, stt_model, translate_model, translate_to):
+        """VAD / Translator / STT are independent model stacks — load them
+        concurrently so startup waits for the slowest load, not their sum.
+        Failures surface in the main thread after the workers join."""
+        loaded: dict[str, Any] = {}
+        errors: list[BaseException] = []
+
+        def _load(name: str, fn) -> None:
+            try:
+                loaded[name] = fn()
+            except Exception as exc:  # noqa: BLE001 - re-raised in the main thread below
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(
+                target=_load,
+                args=("vad", lambda: VAD(self.frame_size, self.sample_rate)),
+            ),
+            threading.Thread(
+                target=_load,
+                args=(
+                    "translator",
+                    lambda: (
+                        Translator(model=translate_model, target_lang=translate_to)
+                        if translate_to
+                        else None
+                    ),
+                ),
+            ),
+            threading.Thread(
+                target=_load,
+                args=("stt", lambda: SpeechToText(stt_model)),
+            ),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if errors:
+            raise errors[0]
+        return loaded["vad"], loaded.get("translator"), loaded["stt"]
+
     def _initialize_state(self):
         self.ring_buffer_maxlen = 20
         self.ring_buffer = collections.deque(maxlen=self.ring_buffer_maxlen)
         self.triggered = False
         self.recorded_frames = []
         self.recorded_frames_count = 0  # Track number of frames recorded
-        self.prev_tail_audio = np.zeros(0, dtype="float32")
         self.q_for_vad = queue.Queue()
         self.q_for_transcription = queue.Queue()
         self.q_for_translation = queue.Queue()
-        self.lock = threading.Lock()
+        self.display_lock = threading.Lock()
         self.transcription_thread = None
         self.vad_thread = None
         self.translation_thread = None
@@ -362,6 +497,25 @@ class RealTimeTranscribe:
         self.transcript = []
         self.full_recording_list = []
         self.start_time = time.time()
+        # Adaptive stability-window state: `committed_*` hold locked (stable)
+        # chunks; `window_*` is the active re-decode window.
+        self.committed_chunks = []
+        self.committed_styled = []
+        self.committed_ts = []
+        self.committed_compute = []
+        self.committed_translations = []
+        self.window_segments = []
+        self.window_audio_duration = 0.0
+        self.window_plain = None
+        self.window_styled = ""
+        self.window_ts = None
+        self.window_compute = None
+        self.window_translation = None
+        self._window_seq = 0
+        self._last_window_translation_text = ""
+        self.final_translation = None
+        self._tty = False
+        self._header_lines: list[str] = []
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -427,23 +581,6 @@ class RealTimeTranscribe:
         b = 0
         return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
 
-    def _format_and_display_transcription(self, result, transcription_time=None):
-        if not (isinstance(result, list) and result):
-            return
-        transcript = self.stt.extract_text(result)
-        time_str = self._get_time_str()
-        self.transcript.append(transcript)
-        if self.plain_output:
-            print(transcript, flush=True)
-        else:
-            formated_transcript = self._format_transcript(result)
-            duration = (
-                f" ({transcription_time:.4f}s)" if transcription_time is not None else ""
-            )
-            print(f"[{time_str}] {formated_transcript}{duration}", flush=True)
-        if self.translator:
-            self.q_for_translation.put(transcript)
-
     def _format_transcript(self, result):
         # Returns colored text for the transcription. Per-word confidence
         # from the sherpa transducer's word_probs (when present) — skips
@@ -462,10 +599,180 @@ class RealTimeTranscribe:
         return f"{int(elapsed // 60):02d}:{elapsed % 60:06.3f}"
 
     def _print_clean_transcript(self):
-        if not self.transcript:
+        parts = [c + _chunk_punct(c) for c in self.committed_chunks if c]
+        if self.window_plain:
+            parts.append(self.window_plain + _chunk_punct(self.window_plain))
+        text = _join_text_parts(parts, force_space=True)
+        if not text:
             return
         print("\nTranscript:")
-        print("\n".join(self.transcript))
+        print(text)
+
+    def _ingest_segment(self, processed_segment):
+        """Adaptive stability-window re-decode (growing-buffer re-decode):
+        append the segment's audio, re-decode the whole window so the newest
+        utterance gets predecessor context, then commit the window once its
+        text stops changing (stability check) and slide it forward."""
+        self.window_segments.append(processed_segment)
+        self.window_audio_duration += len(processed_segment) / self.sample_rate
+        start_time = time.time()
+        result = self.stt.transcribe(np.concatenate(self.window_segments))
+        compute = time.time() - start_time
+        if not (isinstance(result, list) and result):
+            return
+        plain = self.stt.extract_text(result)
+        if not plain:
+            return
+        styled = self._format_transcript(result)
+        ts = self._get_time_str()
+        prev = self.window_plain
+        stable = prev is not None and _stable_prefix(plain, prev)
+        forced = self.window_audio_duration > self.max_window_seconds
+
+        if stable or forced:
+            if prev is not None:
+                self._commit_chunk(
+                    prev,
+                    self.window_styled,
+                    self.window_ts,
+                    self.window_compute,
+                    self.window_translation,
+                )
+            if forced and prev is None:
+                self._commit_chunk(plain, styled, ts, compute)
+                self._reset_window()
+                self._redraw()
+                return
+            # Slide the window to the newest segment and re-decode it alone so
+            # the partial is colored and consistent with the next comparison
+            # baseline (the corrected-tail version is kept only if the
+            # standalone decode comes back empty).
+            self.window_translation = None
+            self.window_segments = [processed_segment]
+            self.window_audio_duration = len(processed_segment) / self.sample_rate
+            start_time = time.time()
+            result2 = self.stt.transcribe(processed_segment)
+            compute2 = time.time() - start_time
+            plain2 = (
+                self.stt.extract_text(result2)
+                if (isinstance(result2, list) and result2)
+                else ""
+            )
+            if plain2:
+                self.window_plain = plain2
+                self.window_styled = self._format_transcript(result2)
+                self.window_ts = ts
+                self.window_compute = compute2
+                self._enqueue_window_translation(plain2)
+            else:
+                tail = _strip_prefix(plain, prev) if prev is not None else plain
+                if not tail.strip():
+                    self._reset_window()
+                    self._redraw()
+                    return
+                self.window_plain = tail
+                self.window_styled = tail
+                self.window_ts = ts
+                self.window_compute = compute
+                self._enqueue_window_translation(tail)
+        else:
+            self.window_plain = plain
+            self.window_styled = styled
+            self.window_ts = ts
+            self.window_compute = compute
+            self._enqueue_window_translation(plain)
+        self._redraw()
+
+    def _reset_window(self):
+        self.window_segments = []
+        self.window_audio_duration = 0.0
+        self.window_plain = None
+        self.window_styled = ""
+        self.window_ts = None
+        self.window_compute = None
+        self.window_translation = None
+
+    def _enqueue_window_translation(self, text):
+        """Live translation of the current window, deduplicated on unchanged
+        text. Seq numbers let the worker drop stale decodes (latest wins) so
+        translation keeps up with the transcript instead of waiting for the
+        window to commit."""
+        if not self.translator or not text or not text.strip():
+            return
+        if text == self._last_window_translation_text:
+            return
+        self._last_window_translation_text = text
+        seq = self._window_seq
+        self._window_seq += 1
+        self.q_for_translation.put(("window", seq, text))
+
+    def _commit_chunk(self, plain, styled, ts, compute, translation=None):
+        # Append the parallel lists atomically under the display lock: a
+        # translation-thread redraw that reads them mid-append would hit an
+        # IndexError and silently kill the worker (translations stopped after
+        # the first sentence — see PLAN.md gotcha).
+        with self.display_lock:
+            self.committed_chunks.append(plain)
+            self.committed_styled.append(styled or plain)
+            self.committed_ts.append(ts)
+            self.committed_compute.append(compute)
+            self.committed_translations.append(translation)
+        if self.translator and plain.strip() and translation is None:
+            self.q_for_translation.put(
+                ("commit", len(self.committed_chunks) - 1, plain)
+            )
+
+    def _fmt_meta_line(self, ts, styled, compute):
+        suffix = f" ({compute:.4f}s)" if compute is not None else ""
+        return f"[{ts}] {styled}{suffix}"
+
+    def _render_lines(self):
+        if self.clean:
+            parts = [c + _chunk_punct(c) for c in self.committed_chunks if c]
+            if self.window_plain:
+                parts.append(self.window_plain)
+            text = _join_text_parts(parts, force_space=True)
+            return [text] if text else []
+        lines = []
+        for i in range(len(self.committed_chunks)):
+            lines.append(
+                self._fmt_meta_line(
+                    self.committed_ts[i],
+                    self.committed_styled[i],
+                    self.committed_compute[i],
+                )
+            )
+            tr = self.committed_translations[i]
+            if tr:
+                lines.append(f"    → {tr}")
+        if self.window_plain:
+            lines.append(
+                self._fmt_meta_line(
+                    self.window_ts, self.window_styled, self.window_compute
+                )
+            )
+            if self.window_translation:
+                lines.append(f"    → {self.window_translation}")
+        return lines
+
+    def _redraw(self):
+        """Redraw the running transcript. In a tty the redraw runs in the
+        alternate screen buffer (vim-style): clear everything and reprint the
+        header + transcript, so no cursor-up/erase-line bookkeeping is needed
+        and no escape sequences leak into scrollback. Non-tty output prints
+        append-only (no ANSI)."""
+        with self.display_lock:
+            if self._tty:
+                sys.stdout.write("\x1b[2J\x1b[H")
+            for line in [*self._header_lines, *self._render_lines()]:
+                sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+
+    def _finalize(self):
+        parts = list(self.committed_chunks)
+        if self.window_plain:
+            parts.append(self.window_plain)
+        self.transcript = [_join_text_parts(parts)]
 
     def _transcription_worker(self):
         while self.running:
@@ -475,30 +782,47 @@ class RealTimeTranscribe:
                 continue
             if segment is None:
                 break
-            full_segment = np.concatenate([self.prev_tail_audio, segment])
-            processed_segment = process_audio_segment(full_segment, self.sample_rate)
+            processed_segment = process_audio_segment(segment, self.sample_rate)
             if processed_segment is None:
                 continue
-            start_time = time.time()
-            result = self.stt.transcribe(processed_segment)
-            transcription_time = time.time() - start_time
-            self._format_and_display_transcription(result, transcription_time)
+            self._ingest_segment(processed_segment)
 
     def _translation_worker(self):
         if self.translator is None:
             return
         while self.running:
             try:
-                transcript = self.q_for_translation.get(timeout=0.1)
+                item = self.q_for_translation.get(timeout=0.1)
             except queue.Empty:
                 continue
+            if item is None:
+                break
+            kind, *rest = item
+            if kind == "commit":
+                idx, transcript = rest
+            else:
+                seq, transcript = rest
+                if seq < self._window_seq - 1:
+                    continue  # stale window decode — a newer one is queued
             if transcript is None:
                 break
-            translate_start = time.time()
-            translated = self.translator.translate(transcript)
-            translate_time = time.time() - translate_start
-            # Print translation on a new indented line below the transcript
-            print(f"    → {translated} ({translate_time:.4f}s)", flush=True)
+            try:
+                translate_start = time.time()
+                translated = self.translator.translate(transcript)
+                translate_time = time.time() - translate_start
+                with self.display_lock:
+                    if kind == "commit":
+                        if idx < len(self.committed_translations):
+                            self.committed_translations[idx] = (
+                                f"{translated} ({translate_time:.4f}s)"
+                            )
+                    else:
+                        self.window_translation = (
+                            f"{translated} ({translate_time:.4f}s)"
+                        )
+                self._redraw()
+            except Exception:  # noqa: S112, BLE001 - best-effort: a failing sentence must not kill the worker and drop every later translation
+                continue
 
     def _stop(self):
         self.running = False
@@ -511,18 +835,34 @@ class RealTimeTranscribe:
             self.vad_thread.join()
         if self.translation_thread is not None:
             self.translation_thread.join()
+        if self.translator and self.window_plain and self.window_plain.strip():
+            if self.window_translation:
+                self.final_translation = self.window_translation
+            else:
+                translate_start = time.time()
+                translated = self.translator.translate(self.window_plain)
+                self.final_translation = (
+                    f"{translated} ({time.time() - translate_start:.4f}s)"
+                )
+        self._finalize()
         if self.audio_file_path and self.full_recording_list:
             full_audio = np.concatenate(self.full_recording_list)
             sf.write(self.audio_file_path, full_audio, self.sample_rate)
             print(f"Audio saved to {self.audio_file_path}")
 
     def run(self):
-        print("Real-time transcribe... (Ctrl+C to stop)")
-        print(f"Speech-to-text model: {self.stt_model_name}")
+        self._tty = sys.stdout.isatty()
+        self._header_lines = [
+            "Real-time transcribe... (Ctrl+C to stop)",
+            f"Speech-to-text model: {self.stt_model_name}",
+        ]
         if self.translator:
-            print(
+            self._header_lines.append(
                 f"Translation model: {self.translator.model} → {self.translator.target_lang}"
             )
+        if self._tty:
+            sys.stdout.write("\x1b[?1049h")
+        self._redraw()
         self.running = True
         self.start_time = time.time()
         self.vad_thread = threading.Thread(target=self._vad_worker, daemon=True)
@@ -548,10 +888,17 @@ class RealTimeTranscribe:
                 while self.running:
                     time.sleep(0.1)
         except KeyboardInterrupt:
-            print("\nStopping...")
-            self._stop()
-            if self.plain_output:
-                self._print_clean_transcript()
+            pass
+        finally:
+            if self._tty:
+                sys.stdout.write("\x1b[?1049l")
+                sys.stdout.flush()
+        print("\nStopping...")
+        self._stop()
+        if not self.clean and self.translator and self.final_translation:
+            print(f"    → {self.final_translation}")
+        if self.clean:
+            self._print_clean_transcript()
 
     def evaluate(self):
         if self.audio_file_path is None:
@@ -567,7 +914,7 @@ class RealTimeTranscribe:
         metrics = {"CER": cer_error}
         # WER only makes sense on whitespace-segmented text (English). On
         # unsegmented Chinese/mixed it compares chars vs segments and explodes
-        # (docs/benchmark.md scores zh with CER for this reason), so skip it.
+        # (_archive/benchmark-2026-08-24.md scores zh with CER for this reason), so skip it.
         if not (
             _contains_cjk(self.reference_transcript)
             or _contains_cjk(self.realtime_transcript)

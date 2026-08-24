@@ -1,9 +1,9 @@
 """en->zh translation — opus-mt-en-zh (Helsinki-NLP seq2seq), the only backend.
 
 Dedicated NMT: deterministic, best BLEU on the benchmark corpus (33.59,
-docs/benchmark.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
+_archive/benchmark-2026-08-24.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
 quality mode was dropped 2026-08-24 — live dictation showed hallucinated
-content and a meaning-reversed error (PLAN.md, docs/benchmark.md).
+content and a meaning-reversed error (PLAN.md, _archive/benchmark-2026-08-24.md).
 """
 
 from __future__ import annotations
@@ -22,8 +22,18 @@ class Translator:
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
         model_id = f"Helsinki-NLP/{model}"
-        self._nmt_tokenizer: Any = AutoTokenizer.from_pretrained(model_id)
-        self._nmt_model: Any = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        try:
+            # skip HF HEAD checks once cached (faster startup)
+            self._nmt_tokenizer: Any = AutoTokenizer.from_pretrained(
+                model_id, local_files_only=True
+            )
+            self._nmt_model: Any = AutoModelForSeq2SeqLM.from_pretrained(
+                model_id, local_files_only=True
+            )
+        except OSError:
+            # not in the HF cache yet — download on first use
+            self._nmt_tokenizer = AutoTokenizer.from_pretrained(model_id)
+            self._nmt_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
 
     def translate(self, text: str) -> str:
         if not text.strip():

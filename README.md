@@ -4,18 +4,20 @@ A real-time, fully local transcription assistant with optional translation — b
 
 ## Key Features
 
-- Real-time continuous local transcription, with per-word confidence color coding
+- Real-time continuous local transcription, with per-word confidence color coding (listen)
+- Adaptive re-transcription: as each utterance arrives, earlier text is re-decoded with more context and self-corrects on the fly (growing-context re-decode — no true streaming in the current models)
 - Optional live local translation
 - Mixed language (zh/en) dictation
+- Dictate mode outputs a clean, continuously-updated transcript that's ready to copy (no timestamps/colors)
 
 ## Modes
 
-One pipeline (mic → VAD → STT → optional translation), two config-driven modes:
+One pipeline (mic → VAD → adaptive-window STT → optional translation), two config-driven modes:
 
 | Mode | Who speaks | What comes out |
 |------|------------|----------------|
-| **listen** | Others (English) | English transcript + Chinese translation |
-| **dictate** | Self (zh/en mixed) | Clean mixed-language dictation |
+| **listen** | Others (English) | English transcript + Chinese translation, colored + timestamped lines |
+| **dictate** | Self (zh/en mixed) | Clean mixed-language dictation, one self-correcting line |
 
 ## Requirements
 
