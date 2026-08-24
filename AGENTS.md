@@ -37,3 +37,13 @@ Docs have fixed roles — keep the right info in the right file.
 - No tests, no CI — don't scaffold either until `PLAN.md` calls for it.
 - Leave `git commit` / `git push` to the human, only suggest a commit title.
 
+## Long-running task protocol
+
+Long benchmark/model runs can hang or fail silently. Interrupt and diagnose like a human would — never commit to one blocking call or blindly re-run.
+
+- **State stop-criteria upfront** when launching a long job: e.g. *"kill if the log shows 3+ consecutive sample FAILEDs, no progress line for N minutes, or a download stalls."*
+- **Run long jobs in the background** (`cmd > log 2>&1 &`) with a log file, poll progress every ~60–120 s, and keep the call bounded (`timeout`) so a hang fails fast.
+- **On interruption (yours or the human's): diagnose first** — tail the log, find the *first* failure, build a minimal repro, fix it, then resume only the remaining work (e.g. the un-run models), never re-run everything.
+- **On failure, check the result artifacts**: an all-FAILED or suspiciously small results file means the run "succeeded" while failing — inspect before trusting it.
+- **Stop early on systemic patterns**: if every sample of the first model section fails, don't let the rest of the run continue — kill, fix, restart.
+

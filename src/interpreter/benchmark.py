@@ -1,29 +1,31 @@
 """
-Local STT benchmark harness — Phase 1 research gate.
+Local STT benchmark harness — Phase 1 model selection.
 
 Benchmarks local STT models against gold-reference transcripts:
 - WER / CER (jiwer), overall and per language block (code-switching WER)
 - Wall-clock decode time and RTF (decode time / audio duration)
 - Peak RSS
 - Segments (start/end/text) per sample, when the model exposes them
-- Streaming decode (--stream) for models that support it (moonshine v2):
-  records per-update (stream_time, wall_time, text) for tail-latency analysis
+- Streaming decode (--stream): per-update (stream_time, wall_time, text)
+  tail-latency analysis. Dormant since 2026-08-24 — Moonshine (the only
+  stream-capable model) was dropped from the product; the hooks stay for a
+  future streaming model (e.g. a sherpa-onnx online-recognizer probe).
 
 Usage:
   uv run python -m interpreter.benchmark --list                          # stt models + samples
   uv run python -m interpreter.benchmark                                 # all stt models
-  uv run python -m interpreter.benchmark whispercpp-large-v3-turbo-q5_0 moonshine-streaming-medium
+  uv run python -m interpreter.benchmark parakeet-tdt-0.6b-v2 sensevoice
   uv run python -m interpreter.benchmark --samples sample_a1
-  uv run python -m interpreter.benchmark --stream moonshine-streaming-medium
   uv run python -m interpreter.benchmark --task translate                # all en->zh models
   uv run python -m interpreter.benchmark --task translate opus-mt-en-zh
   uv run python -m interpreter.benchmark --record mode_b_1.wav 30  # host only (mic)
 
 Default runs load one model per subprocess (load -> benchmark -> write JSON
 -> exit, memory fully released -> next model). A model killed by OOM
-(exit 137) is recorded as "excluded: OOM" and the run continues — this is the
-container's 4 GB memory budget acting as the model filter: anything that does
-not fit is not considered. Use --in-process to disable isolation (debugging).
+(exit -9 / 137) is recorded as "excluded: OOM" and the run continues — this is the
+container's memory budget acting as the model filter: anything that does not
+fit is not considered (8 GB since the 2026-08-24 upgrade; was 4 GB). Use
+--in-process to disable isolation (debugging).
 
 RTF (Real-Time Factor) = decode wall time / audio duration; < 1.0 means the
 model processes faster than real time. The container numbers are relative
@@ -39,8 +41,6 @@ Environment notes:
 - sherpa-onnx is pinned to 1.13.0 + onnxruntime 1.24.4: newer sherpa
   wheels link a VERS_1.27.1 symbol that no PyPI onnxruntime exports
   (see PLAN.md Phase 1 deps item).
-- Moonshine STT is the `moonshine-voice` package (PyPI `moonshine` is an
-  unrelated remote-sensing library; `moonshine-ml` no longer exists).
 """
 
 from __future__ import annotations
@@ -232,24 +232,6 @@ class Adapter:
         raise NotImplementedError
 
 
-class _WhisperCpp(Adapter):
-    def __init__(self, model_size: str) -> None:
-        super().__init__()
-        from pywhispercpp.model import Model
-
-        t0 = time.perf_counter()
-        self.model = Model(model_size, n_threads=4, print_progress=False)
-        self.load_s = time.perf_counter() - t0
-
-    def transcribe(self, sample: Sample, use_stream: bool = False):
-        t0 = time.perf_counter()
-        segs = self.model.transcribe(str(TRANSCRIBE_DIR / sample.path), temperature=0.0)
-        wall = time.perf_counter() - t0
-        segments = [(s.t0, s.t1, s.text.strip()) for s in segs]
-        text = " ".join(t for _, _, t in segments)
-        return text, {"segments": segments, "wall": wall}
-
-
 class _FasterWhisper(Adapter):
     def __init__(self, model_size: str = "large-v3") -> None:
         super().__init__()
@@ -295,76 +277,6 @@ class _OpenAIWhisper(Adapter):
         text = result["text"].strip()
         segs = [(s["start"], s["end"], s["text"].strip()) for s in result["segments"]]
         return text, {"segments": segs, "wall": wall}
-
-
-class _Moonshine(Adapter):
-    """Moonshine v2 streaming-medium via moonshine-voice."""
-
-    name = "moonshine-streaming-medium"
-    tier = "en-only"
-    modes = ("A",)
-    stream_capable = True
-    weight_note = "downloads from download.moonshine.ai; arch MEDIUM_STREAMING"
-
-    def __init__(self) -> None:
-        super().__init__()
-        from moonshine_voice import get_model_for_language
-        from moonshine_voice.moonshine_api import ModelArch
-        from moonshine_voice.transcriber import Transcriber
-
-        t0 = time.perf_counter()
-        self.arch = ModelArch.MEDIUM_STREAMING
-        self.model_path, _ = get_model_for_language("en", self.arch)
-        self.transcriber = Transcriber(model_path=self.model_path, model_arch=self.arch)
-        self.load_s = time.perf_counter() - t0
-
-    def _lines_to_segments(self, transcript) -> list[tuple[float, float, str]]:
-        return [
-            (l.start_time, l.start_time + l.duration, (l.text or "").strip())
-            for l in transcript.lines
-        ]
-
-    def transcribe(self, sample: Sample, use_stream: bool = False):
-        audio, sr = sf.read(str(TRANSCRIBE_DIR / sample.path), dtype="float32")
-        audio_list = audio.tolist()
-        t0 = time.perf_counter()
-        transcript = self.transcriber.transcribe_without_streaming(audio_list, sr)
-        wall = time.perf_counter() - t0
-        segs = self._lines_to_segments(transcript)
-        text = " ".join(t for _, _, t in segs)
-        return text, {"segments": segs, "wall": wall}
-
-    def stream_info(self, sample: Sample) -> dict:
-        """Feed audio in 0.25 s chunks; record (stream_time, wall, text) per update."""
-        audio, sr = sf.read(str(TRANSCRIBE_DIR / sample.path), dtype="float32")
-        stream = self.transcriber.create_stream()
-        stream.start()
-        updates: list[dict] = []
-        chunk = int(0.25 * sr)
-        stream_time = 0.0
-        last_text = ""
-        t0 = time.perf_counter()
-        for i in range(0, len(audio), chunk):
-            stream.add_audio(audio[i : i + chunk].tolist(), sr)
-            stream_time += len(audio[i : i + chunk]) / sr
-            transcript = stream.update_transcription()
-            text = " ".join((l.text or "").strip() for l in transcript.lines)
-            if text != last_text:
-                updates.append(
-                    {
-                        "stream_time": stream_time,
-                        "wall": time.perf_counter() - t0,
-                        "text": text,
-                    }
-                )
-                last_text = text
-        transcript = stream.stop()
-        wall = time.perf_counter() - t0
-        return {
-            "updates": updates,
-            "segments": self._lines_to_segments(transcript),
-            "wall": wall,
-        }
 
 
 def _onnxruntime_capi_dir() -> Path | None:
@@ -458,13 +370,13 @@ class _ArkAsr(Adapter):
         from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
         t0 = time.perf_counter()
-        self.processor = AutoProcessor.from_pretrained(
+        self.processor: Any = AutoProcessor.from_pretrained(
             "AutoArk-AI/ARK-ASR-0.6B", trust_remote_code=True
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(
+        self.tokenizer: Any = AutoTokenizer.from_pretrained(
             "AutoArk-AI/ARK-ASR-0.6B", trust_remote_code=True
         )
-        self.model = AutoModelForCausalLM.from_pretrained(
+        self.model: Any = AutoModelForCausalLM.from_pretrained(
             "AutoArk-AI/ARK-ASR-0.6B",
             trust_remote_code=True,
             torch_dtype=torch.float32,
@@ -482,7 +394,9 @@ class _ArkAsr(Adapter):
         bad_ids.update(
             token_id
             for token, token_id in tokenizer.get_added_vocab().items()
-            if token.startswith("<") and token.endswith(">") and token_id not in keep_ids
+            if token.startswith("<")
+            and token.endswith(">")
+            and token_id not in keep_ids
         )
         return [[token_id] for token_id in sorted(bad_ids)]
 
@@ -662,24 +576,7 @@ def _download_model_files(name: str) -> None:
 
 def make_adapter(name: str) -> Adapter:
     t0 = time.perf_counter()
-    if name.startswith("whispercpp-"):
-        sizes = {
-            "whispercpp-large-v3-turbo-q5_0": "large-v3-turbo-q5_0",  # STT baseline
-            "whispercpp-base": "base",
-            "whispercpp-small": "small",
-            "whispercpp-medium-en": "medium.en",
-        }
-        en_only = name == "whispercpp-medium-en"
-        adapter = _WhisperCpp(sizes[name])
-        adapter.name = name
-        adapter.tier = "en-only" if en_only else "multilingual"
-        adapter.modes = ("A",) if en_only else ("A", "B")
-        adapter.weight_note = (
-            "auto-downloaded via pywhispercpp (547 MB for q5_0)"
-            if name == "whispercpp-large-v3-turbo-q5_0"
-            else ""
-        )
-    elif name in (
+    if name in (
         "faster-whisper-small",
         "faster-whisper-medium",
     ):
@@ -692,8 +589,6 @@ def make_adapter(name: str) -> Adapter:
         adapter.name = name
         adapter.tier = "multilingual"
         adapter.weight_note = "openai-whisper (torch, fp32)"
-    elif name == "moonshine-streaming-medium":
-        adapter = _Moonshine()
     elif name == "ark-asr-0.6b":
         adapter = _ArkAsr()
     elif name in _MODEL_FILES:
@@ -712,14 +607,9 @@ def make_adapter(name: str) -> Adapter:
 
 def available_models() -> list[str]:
     return [
-        "whispercpp-large-v3-turbo-q5_0",  # STT baseline (product default)
-        "whispercpp-base",
-        "whispercpp-small",
-        "whispercpp-medium-en",
         "whisper-small",
         "faster-whisper-small",
         "faster-whisper-medium",
-        "moonshine-streaming-medium",
         "parakeet-tdt-0.6b-v2",
         "parakeet-tdt-0.6b-v3",
         "dolphin-small",
@@ -1087,7 +977,9 @@ def main() -> None:
         audio = sd.rec(int(args.seconds * fs), fs, channels=1, dtype="float32")
         sd.wait()
         sf.write(args.record, audio, fs)
-        print(f"Saved {args.record} — add it + a reference to data/benchmark/transcribe/manifest.json")
+        print(
+            f"Saved {args.record} — add it + a reference to data/benchmark/transcribe/manifest.json"
+        )
         return
 
     samples = load_manifest()

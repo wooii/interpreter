@@ -40,7 +40,7 @@ Run from the project root (where `pyproject.toml` is), e.g. the real-time transc
 uv run python -m interpreter.transcribe
 ```
 
-The first run downloads the whisper.cpp model weights (e.g. `large-v3-turbo-q5_0`, several GB) via pywhispercpp.
+The first run downloads the STT model weights (sherpa-onnx int8, e.g. `sensevoice` / `parakeet-tdt-0.6b-v2`) anonymously from Hugging Face.
 
 ## Roadmap
 

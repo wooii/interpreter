@@ -57,14 +57,21 @@ class AudioFileProcessor(AudioDataProcessor):
         self.audio_data = sd.rec(frames, self.sampling_rate, channels=1)
         sd.wait()  # Wait until recording is finished
         if self.audio_format == "wav":
-            wavio.write(self.audio_file_path_str, self.audio_data, self.sampling_rate, sampwidth=2)
+            wavio.write(
+                self.audio_file_path_str,
+                self.audio_data,
+                self.sampling_rate,
+                sampwidth=2,
+            )
             return self.audio_file_path
         else:
             return self.convert_format(output_format=self.audio_format)
 
-    def convert_format(self, output_format='mp3'):
-        output_file_path = self.audio_file_path.with_suffix(f'.{output_format}')
-        self._process_audio(sf.write, output_file_path, self.audio_data, self.sampling_rate)
+    def convert_format(self, output_format="mp3"):
+        output_file_path = self.audio_file_path.with_suffix(f".{output_format}")
+        self._process_audio(
+            sf.write, output_file_path, self.audio_data, self.sampling_rate
+        )
         return output_file_path
 
     def plot_mel_spectrogram(self):
@@ -72,18 +79,18 @@ class AudioFileProcessor(AudioDataProcessor):
         audio = whisper.load_audio(str(self.audio_file_path))
         mel = whisper.log_mel_spectrogram(audio)
         plt.figure(figsize=(10, 6))
-        plt.imshow(mel, aspect='auto', origin='lower', cmap='viridis')
-        plt.colorbar(label='Log Mel Spectrogram')
-        plt.title('Mel Spectrogram')
-        plt.xlabel('Time')
-        plt.ylabel('Mel Frequency Bins')
+        plt.imshow(mel, aspect="auto", origin="lower", cmap="viridis")
+        plt.colorbar(label="Log Mel Spectrogram")
+        plt.title("Mel Spectrogram")
+        plt.xlabel("Time")
+        plt.ylabel("Mel Frequency Bins")
         plt.tight_layout()
         plt.show()
 
 
 if __name__ == "__main__":
     # test AudioProcessor
-    audio_file_path = DATA_DIR / "recorded_audio.mp3"
+    audio_file_path = DATA_DIR / "audio.mp3"
     self = AudioFileProcessor(audio_file_path, sampling_rate=16000)
     self.record(duration_seconds=5)
     self.play()
@@ -91,5 +98,3 @@ if __name__ == "__main__":
     self.plot_mel_spectrogram()
     # self.convert_format(output_format='mp3')
     # self = AudioDataProcessor(audio_data=audio_sample["array"], sampling_rate=16000)
-
-

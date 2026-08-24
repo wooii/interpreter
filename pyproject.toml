@@ -9,13 +9,18 @@ license = { text = "MIT" }
 keywords = ["ai", "interpreter", "transcription", "stt", "translation"]
 dependencies = [
     "faster-whisper>=1.2.1",
+    "funasr>=1.4.3",
+    "huggingface-hub>=1.28.0",
     "jiwer>=4.0.0",
     "matplotlib>=3.11.1",
+    "modelscope>=1.39.1",
     "noisereduce>=3.0.3",
     "numpy>=2.5.2",
-    "ollama>=0.6.2",
+    "onnxruntime==1.24.4",
     "openai-whisper>=20250625",
-    "pywhispercpp>=1.5.0",
+    "sacrebleu>=2.6.0",
+    "sacremoses>=0.2.0",
+    "sherpa-onnx==1.13.0",
     "sounddevice>=0.5.6",
     "soundfile>=0.14.0",
     "torch>=2.13.0",
@@ -38,6 +43,9 @@ dev = [
 
 [tool.uv.sources]
 torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+torchaudio = [
   { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
 ]
 

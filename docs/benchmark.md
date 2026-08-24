@@ -6,8 +6,8 @@ Status: **container pass re-run done (2026-08-24)** — 60 STT samples per model
 
 The harness (`src/interpreter/benchmark.py`) benchmarks two kinds of models, selected by `--task`:
 
-- **Transcribe (STT)** — `--task stt` (default): audio → text. Whisper-family, sherpa-onnx ASR, Moonshine. Scored with WER/CER/RTF/RSS. **Baseline (product default): `whispercpp-large-v3-turbo-q5_0`** (whisper.cpp `large-v3-turbo-q5_0` via pywhispercpp).
-- **Translate (en → zh)** — `--task translate`: text → text. Dedicated NMT (opus-mt, M2M100); the former LLM baseline (`ollama-qwen3.5-0.8b`) was dropped with the product quality mode (2026-08-24 — see the gate conclusion). Scored with BLEU(zh), ms/sentence, RSS. **Product default: `opus-mt-en-zh`.**
+- **Transcribe (STT)** — `--task stt` (default): audio → text. Whisper-family, sherpa-onnx ASR, Moonshine. Scored with WER/CER/RTF/RSS. **Historical baseline: `whispercpp-large-v3-turbo-q5_0`** (whisper.cpp via pywhispercpp — dropped from the product 2026-08-24; see the Phase 1 conclusion).
+- **Translate (en → zh)** — `--task translate`: text → text. Dedicated NMT (opus-mt, M2M100); the former LLM baseline (`ollama-qwen3.5-0.8b`) was dropped with the product quality mode (2026-08-24 — see the Phase 1 conclusion). Scored with BLEU(zh), ms/sentence, RSS. **Product default: `opus-mt-en-zh`.**
 
 Directory layout:
 
@@ -97,10 +97,15 @@ exclusions are rare — size/license policy exclusions (below) now dominate.
 ```bash
 uv run python -m interpreter.benchmark --list                        # models + samples
 uv run python -m interpreter.benchmark                               # all STT models, one subprocess each
-uv run python -m interpreter.benchmark whispercpp-large-v3-turbo-q5_0 moonshine-streaming-medium
+uv run python -m interpreter.benchmark parakeet-tdt-0.6b-v2 sensevoice
 uv run python -m interpreter.benchmark --samples sample_a1
-uv run python -m interpreter.benchmark --stream moonshine-streaming-medium
 ```
+
+Benchmarking runs only in the container (policy) — there, prefix every command with
+`UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync` (plain `uv run` targets the
+host venv; AGENTS.md). The registry is now the 10 product-relevant models —
+whisper.cpp and Moonshine adapters were removed 2026-08-24 (re-run those from commit
+`59e91d7`).
 
 Per-model STT JSONs land in `data/benchmark/transcribe/results/<model>.json` (gitignored
 under `/data/`); the parent prints the merged table and writes
@@ -210,33 +215,74 @@ policy (2026-08-24).
 - **Multilingual verdict** is from synthesized mixed samples; self-recorded dictation
   remains a future validation, not a blocker.
 
-### Recommendation / Phase 1 gate conclusion (2026-08-24, from the 60-sample pass)
+### Recommendation / Phase 1 conclusion (2026-08-24, from the 60-sample pass)
 
 Chosen model set from the merged table, mapped to the config matrix:
 
 | Config cell | Model | Rationale |
 |---|---|---|
-| listen / en-only | **Parakeet TDT 0.6B v2** (sherpa int8) | best en WER (0.148) at RTF 0.027 — ~95× less compute than the baseline; transducer = streaming-capable weights (probe sherpa's online recognizer in Phase 2) |
+| listen / en-only | **Parakeet TDT 0.6B v2** (sherpa int8) | best en WER (0.148) at RTF 0.027 — ~95× less compute than the baseline; transducer = streaming-capable weights (probe sherpa's online recognizer in Phase 2 — the future streaming path, see below) |
 | dictate / multilingual | **SenseVoiceSmall** (sherpa int8) | only candidate that truly code-switches (zh CER 0.008, mixed 0.182); fastest + lightest model in the benchmark (RTF 0.010, 564 MB); Qwen3-ASR `0.6B` (mixed 0.384, RTF 0.099) is the closest alternative |
-| listen / streaming live | **Moonshine v2 streaming-medium** (backup) | only one with a real streaming API today (partials in ~1 s, keeps real time easily); en WER 0.204 — used when live partials matter more than final accuracy; superseded if the Parakeet online probe works |
+| listen / streaming live | ~~Moonshine v2 streaming-medium~~ **dropped 2026-08-24** | was the only one with a real streaming API (partials in ~1 s), but weaker on accuracy/speed than Parakeet; the streaming path is now a sherpa-onnx `OnlineRecognizer` probe of Parakeet (Phase 2) |
 
 **Baseline verdict — superseded:** the product default `whispercpp-large-v3-turbo-q5_0`
 loses its role. It is dominated on every axis measured: worse en WER than Parakeet v2
 (0.191 vs 0.148) at ~95× the compute, worst-in-class zh (0.644 — whisper English
 misdetection), mixed 0.526 vs SenseVoice's 0.182, and the highest RTF in the table
 (2.587). No config cell keeps it; it survives only as the historical measurement
-anchor. Phase 1 gate conclusion: **listen → Parakeet v2, dictate → SenseVoiceSmall,
-streaming → Moonshine v2**, translate → **opus-mt-en-zh (the only backend)** — best BLEU
+anchor. Phase 1 conclusion: **listen → Parakeet v2, dictate → SenseVoiceSmall**,
+translate → **opus-mt-en-zh (the only backend)** — best BLEU
 (33.59 vs the qwen3.5 baseline's 24.16); the qwen3.5 LLM quality mode was **dropped
 2026-08-24** after a live en→zh dictation A/B showed hallucinated content and a
 meaning-reversed error ("choose this model instead" → 换成另一种方式) at higher latency
 (docs in PLAN.md). Implemented in `transcribe.py` on 2026-08-24 (sherpa STT backends +
-the opus-mt translate backend); per-mode defaults in `profiles/` land with the Phase 2
+the opus-mt translate backend; whisper.cpp and Moonshine dropped the same day);
+per-mode defaults in
+`profiles/` land with the Phase 2
 config plumbing. **Interim product default (2026-08-24): `sensevoice` + `opus-mt-en-zh`** —
 until Phase 2 wires per-mode config, the single STT default is the dictate/multilingual
 winner (only true code-switcher, fastest + lightest model in the benchmark; en-only
 accuracy takes a small hit vs Parakeet in the interim), with parakeet-tdt-0.6b-v2
 selectable via `stt_model="parakeet-tdt-0.6b-v2"`.
+
+**whisper.cpp dropped from the product completely (2026-08-24)** — the results above
+stay as the historical record, but whisper.cpp is no longer in `transcribe.py`, the
+benchmark harness, or the dependencies (`pywhispercpp` removed). Why:
+- **Dominated on every axis** — the baseline `large-v3-turbo-q5_0` is worse en than
+  Parakeet (0.191 vs 0.148) at ~95× the compute, worst-class zh (0.644, from whisper's
+  English misdetection), no code-switching (mixed 0.526 vs SenseVoice 0.182), and the
+  highest RTF (2.587). No config cell keeps it, so it has no product role.
+- **The sherpa pair covers everything** — SenseVoiceSmall (dictate/multilingual) +
+  Parakeet (listen/en-only) fill all STT roles; whisper.cpp's last edge, per-segment
+  probability coloring, was superseded by Parakeet's real per-word coloring (from
+  token log-probs), leaving no remaining differentiator.
+- **Operational weight** — `pywhispercpp` is a compiled binding with multi-GB ggml
+  weight downloads, and its context is not thread-safe (a Phase 2 parallel-worker
+  concern); dropping it also let the legacy `model_comparison.py` harness go.
+- No separate snapshot commit was made — the pre-drop harness survives at commit
+  `59e91d7` (`feat: add benchmark.py`): that tree has `benchmark.py` with the
+  whisper.cpp + Moonshine adapters and `--stream` hooks, plus `whispercpp.py`.
+  Re-run whisper.cpp benchmarking from there (deps: `pywhispercpp`).
+
+**Moonshine dropped from the product completely (2026-08-24)** — the results above
+(and the M4 spot-run) stay as the historical record, but Moonshine is no longer in
+`transcribe.py`, the benchmark harness, or the dependencies (`moonshine-voice` removed).
+Why:
+- **Its only edge couldn't be exercised** — Moonshine's value is live streaming
+  partials (~1 s), but the product pipeline is segment-based (VAD → whole segment →
+  transcribe), so it was wired up with `transcribe_without_streaming` — the *same*
+  interaction as the sherpa backends, where it was never meant to win.
+- **Weakest of the candidates on the axis that mattered** — live A/B and the
+  benchmark agree: worse en WER (0.204 vs Parakeet 0.148) and slower per segment
+  than Parakeet; no product role as a segment-based model.
+- **The future streaming path doesn't need it** — Parakeet is a transducer
+  (streaming-capable weights); a sherpa-onnx `OnlineRecognizer` probe of Parakeet
+  (Phase 2) would deliver live partials *with* the benchmark's best accuracy, which
+  Moonshine can't match. The harness's `--stream` hooks stay dormant for that.
+- Moonshine was never committed as its own file and the `moonshine-voice` dep was
+  never in `pyproject.toml` — its adapter + `--stream` hooks survive in
+  `benchmark.py` at `59e91d7`, but the dependency itself is not recoverable from
+  git history (would need re-adding to re-run).
 
 **Dropped:** the entire whisper family (whisper.cpp base/small/medium.en, faster-whisper
 small/medium, openai whisper-small) — every one dominated (slower than Parakeet,
@@ -250,12 +296,14 @@ open); Parakeet v3 (en non-upgrade over v2). Faster-whisper `large-v3`, Qwen3-AS
 Qwen3-MT-0.6B: out by the ≤1B / license / auth policy (see "Model scope policy").
 
 **Phase 2 implications:** one `SherpaStt` backend, config-driven model choice (both
-winners run on sherpa-onnx int8); Moonshine stays a separate streaming backend; the
+winners run on sherpa-onnx int8); **Moonshine dropped 2026-08-24** (see above) — the
+streaming path becomes a sherpa-onnx `OnlineRecognizer` probe of Parakeet (transducer =
+streaming-capable weights); the harness's `--stream` hooks stay dormant for it. The
 per-word confidence coloring: **done for the sherpa transducer (parakeet)** — per-token
 `ys_log_probs` grouped into word probs in `sherpa_stt.py` (`_word_probs_from_result`,
 2026-08-24); **SenseVoice exposes no per-token scores in sherpa-onnx 1.13.0** — its
-output stays uniform until a sherpa release surfaces them; `profiles/` defaults: listen
-→ parakeet, dictate → sensevoice, streaming → moonshine.
+output stays uniform until a sherpa release surfaces them; `profiles/` defaults:
+listen → parakeet, dictate → sensevoice.
 
 ### Reference: M4 host spot-run (context only, not the decision basis)
 
@@ -292,6 +340,9 @@ uv run python -m interpreter.benchmark --task translate              # all trans
 uv run python -m interpreter.benchmark --task translate opus-mt-en-zh
 ```
 
+Same container rule as the STT task: prefix with
+`UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync` in the container (AGENTS.md).
+
 Per-model JSONs land in `data/benchmark/translate/results/<model>.json`; the parent
 prints the merged table and writes `data/benchmark/translate/results/merged.json`.
 
@@ -319,7 +370,10 @@ product's only translation backend** (best BLEU at ~1.2 s/sentence, 1172 MB); qw
 the former quality-mode LLM baseline — scores 9.4 BLEU below opus-mt at similar
 per-sentence cost and was **dropped 2026-08-24** (live dictation A/B: hallucinated
 content + meaning reversal; see PLAN.md). The ollama adapter and `ollama` dependency
-were removed from the product and the benchmark harness.
+were removed from the product and the benchmark harness. Early research (2026-08-22)
+motivated the fast-NMT default: dedicated NMT ≈ 50–300 ms/sentence vs ~1–5 s for Ollama
+small LLMs; NLLB-200 3.3B quality ≈ 4 BLEU below Qwen3-32B local (NLLB excluded anyway:
+CC-BY-NC).
 
 ### Merged results — initial pass (2026-08-23, reference)
 

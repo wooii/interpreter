@@ -1,19 +1,58 @@
+"""Real-time speech-to-text with optional translation.
+
+Quick start (defaults: SenseVoice STT + opus-mt-en-zh translation):
+
+    from interpreter.transcribe import RealTimeTranscribe
+
+    rtt = RealTimeTranscribe(translate_to="Chinese")
+    rtt.run()                       # live mic; Ctrl+C to stop
+    rtt.evaluate()                  # WER/CER vs full-file reference (needs audio_file_path)
+
+Model selection:
+
+    RealTimeTranscribe(stt_model="sensevoice")             # default; zh<->en code-switching
+    RealTimeTranscribe(stt_model="parakeet-tdt-0.6b-v2")   # best en-only accuracy
+
+    RealTimeTranscribe(translate_model="opus-mt-en-zh")    # default; dedicated NMT, en->zh
+    RealTimeTranscribe(translate_to=None)                  # no translation
+
+Record a session for later evaluation:
+
+    rtt = RealTimeTranscribe(audio_file_path="session.wav", translate_to=None)
+    rtt.run()                       # writes session.wav on stop
+    rtt.evaluate()                  # WER/CER of the live transcript vs offline re-transcribe
+
+Standalone use (no mic): transcribe a 16 kHz mono file or array directly
+
+    from interpreter.transcribe import SpeechToText, Translator
+
+    stt = SpeechToText("sensevoice")            # or "parakeet-tdt-0.6b-v2"
+    text = stt.extract_text(stt.transcribe_file("clip.wav"))
+    print(Translator().translate(text))         # opus-mt-en-zh -> Chinese
+
+CLI: `python -m interpreter.transcribe` runs live dictation with the defaults
+(STT = sensevoice, translate = opus-mt-en-zh, output to data/transcribe_<ts>.wav).
+Model picks follow the Phase 1 conclusion (docs/benchmark.md); weights download
+anonymously from HF on first use.
+"""
+
+from __future__ import annotations
+
 import collections
 import datetime
 import queue
 import threading
 import time
+from typing import Any
 
 import noisereduce as nr
 import numpy as np
-import ollama
 import sounddevice as sd
 import soundfile as sf
 import torch
 from jiwer import cer, wer
 
 from interpreter import DATA_DIR
-from interpreter.whispercpp import WhisperCppModel
 
 
 class VAD:
@@ -39,23 +78,29 @@ class VAD:
 
 
 class Translator:
-    def __init__(self, model="qwen3.5:0.8b", target_lang="Chinese"):
+    """en->zh translation — opus-mt-en-zh (Helsinki-NLP seq2seq), the only backend.
+
+    Dedicated NMT: deterministic, best BLEU on the benchmark corpus (33.59,
+    docs/benchmark.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
+    quality mode was dropped 2026-08-24 — live dictation showed hallucinated
+    content and a meaning-reversed error (PLAN.md, docs/benchmark.md).
+    """
+
+    def __init__(self, model="opus-mt-en-zh", target_lang="Chinese"):
         self.model = model
         self.target_lang = target_lang
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+        model_id = f"Helsinki-NLP/{model}"
+        self._nmt_tokenizer: Any = AutoTokenizer.from_pretrained(model_id)
+        self._nmt_model: Any = AutoModelForSeq2SeqLM.from_pretrained(model_id)
 
     def translate(self, text: str) -> str:
         if not text.strip():
             return ""
-        prompt = f"Translate to {self.target_lang}:\n{text}"
-        try:
-            response = ollama.chat(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                think=False,
-            )
-            return response["message"]["content"].strip()
-        except (ollama.ResponseError, ConnectionError) as e:
-            return f"[Translation error: {e}]"
+        inputs = self._nmt_tokenizer(text, return_tensors="pt", truncation=True)
+        out = self._nmt_model.generate(**inputs, max_length=256)
+        return self._nmt_tokenizer.decode(out[0], skip_special_tokens=True).strip()
 
 
 def process_audio_segment(full_segment, sample_rate):
@@ -70,25 +115,32 @@ def process_audio_segment(full_segment, sample_rate):
 
 
 class SpeechToText:
-    def __init__(self, model_size):
-        self.model = WhisperCppModel(
-            model_size,
-            token_timestamps=True,
-            max_len=1,
-            split_on_word=True,
-            # translate=False,
-            # language='chinese',
-            print_progress=False,
-        )
+    """STT backend dispatch — Phase 1 model-selection winners (docs/benchmark.md).
+    Sherpa-onnx int8 only since 2026-08-24 (whisper.cpp and Moonshine both
+    dropped — see docs/benchmark.md for the reasons).
+
+    model_name:
+      - "sensevoice"            product default (sherpa int8; dictate/multilingual winner)
+      - "parakeet-tdt-0.6b-v2"  en-only / listen option (sherpa int8 transducer)
+
+    Per-word confidence coloring: the sherpa transducer (parakeet) exposes
+    per-token log-probs, grouped into word probs in sherpa_stt.py.
+    SenseVoice exposes no per-token scores in sherpa-onnx 1.13.0 — its
+    output is uncolored (uniform), a known limitation (docs/benchmark.md).
+    """
+
+    def __init__(self, model_name):
+        from interpreter.sherpa_stt import SherpaStt
+
+        self.model_name = model_name
+        self.model: Any = SherpaStt(model_name)
 
     def transcribe(self, audio: np.ndarray):
-        return self.model.transcribe(
-            media=audio.astype(np.float32),
-            temperature=0.0,
-        )
+        audio = audio.astype(np.float32)
+        return self.model.transcribe(audio)
 
     def transcribe_file(self, file_path: str):
-        return self.model.transcribe(str(file_path))
+        return self.model.transcribe_file(str(file_path))
 
     def extract_text(self, result):
         return " ".join([i.text for i in result]).strip()
@@ -98,20 +150,25 @@ class RealTimeTranscribe:
     def __init__(
         self,
         audio_file_path=None,
-        stt_model_size="small",
+        stt_model="sensevoice",
+        translate_model="opus-mt-en-zh",
         translate_to="Chinese",
         max_segment_duration=5.0,
     ):
         self.audio_file_path = audio_file_path
-        self.stt_model_size = stt_model_size
+        self.stt_model = stt_model
         self.translate_to = translate_to
         self.max_segment_duration = max_segment_duration
         self.sample_rate = 16000
         self.frame_size = 512
         self.vad = VAD(self.frame_size, self.sample_rate)
-        self.translator = Translator(target_lang=translate_to) if translate_to else None
-        self.stt = SpeechToText(stt_model_size)
-        self.stt_model_name = self.stt.model.__class__.__name__
+        self.translator = (
+            Translator(model=translate_model, target_lang=translate_to)
+            if translate_to
+            else None
+        )
+        self.stt = SpeechToText(stt_model)
+        self.stt_model_name = self.stt.model_name
         self._initialize_state()
         # Calculate max frames based on the configurable duration
         self.max_segment_frames = int(
@@ -201,22 +258,32 @@ class RealTimeTranscribe:
         b = 0
         return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
 
-    def _format_and_display_transcription(self, result):
+    def _format_and_display_transcription(self, result, transcription_time=None):
         if not (isinstance(result, list) and result):
             return
         transcript = self.stt.extract_text(result)
         formated_transcript = self._format_transcript(result)
         time_str = self._get_time_str()
         self.transcript.append(transcript)
-        print(f"[{time_str}] {formated_transcript}", flush=True)
+        duration = (
+            f" ({transcription_time:.4f}s)" if transcription_time is not None else ""
+        )
+        print(f"[{time_str}] {formated_transcript}{duration}", flush=True)
         if self.translator:
             self.q_for_translation.put(transcript)
 
     def _format_transcript(self, result):
-        # Returns colored text for the transcription
-        return " ".join(
-            self._color_word(i.text.strip(), i.probability) for i in result
-        ).strip()
+        # Returns colored text for the transcription. Per-word confidence
+        # from the sherpa transducer's word_probs (when present) — skips
+        # empty segments/words.
+        parts = []
+        for seg in result:
+            word_probs = getattr(seg, "word_probs", None)
+            if word_probs:
+                parts.append(" ".join(self._color_word(w, p) for w, p in word_probs))
+            elif seg.text.strip():
+                parts.append(self._color_word(seg.text.strip(), seg.probability))
+        return " ".join(parts).strip()
 
     def _get_time_str(self):
         elapsed = time.time() - self.start_time
@@ -234,11 +301,10 @@ class RealTimeTranscribe:
             processed_segment = process_audio_segment(full_segment, self.sample_rate)
             if processed_segment is None:
                 continue
-            # start_time = time.time()
+            start_time = time.time()
             result = self.stt.transcribe(processed_segment)
-            # transcription_time = time.time() - start_time
-            self._format_and_display_transcription(result)
-            # print(f"    [Transcription time: {transcription_time:.4f}s]", flush=True)
+            transcription_time = time.time() - start_time
+            self._format_and_display_transcription(result, transcription_time)
 
     def _translation_worker(self):
         if self.translator is None:
@@ -274,7 +340,7 @@ class RealTimeTranscribe:
 
     def run(self):
         print("Real-time transcribe... (Ctrl+C to stop)")
-        print(f"Speech-to-text model: {self.stt_model_name} ({self.stt_model_size})")
+        print(f"Speech-to-text model: {self.stt_model_name}")
         if self.translator:
             print(
                 f"Translation model: {self.translator.model} → {self.translator.target_lang}"
@@ -330,9 +396,18 @@ class RealTimeTranscribe:
 if __name__ == "__main__":
     timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
 
+    # Phase 1 conclusion defaults (docs/benchmark.md, 2026-08-24):
+    #   per-mode target: listen -> parakeet-tdt-0.6b-v2, dictate -> sensevoice;
+    #   streaming (Moonshine) dropped 2026-08-24 — sherpa online recognizer
+    #   probe is the future streaming path (Phase 2). Until Phase 2 wires
+    #   per-mode config, the product default is sensevoice (best code-switcher,
+    #   fastest+lightest)
+    #   + opus-mt-en-zh (dedicated NMT, best BLEU; qwen LLM quality mode dropped
+    #   2026-08-24 — see PLAN.md).
     self = RealTimeTranscribe(
-        audio_file_path=DATA_DIR / f"streaming_audio_{timestamp}.wav",
-        stt_model_size="large-v3-turbo-q5_0",
+        audio_file_path=DATA_DIR / f"transcribe_{timestamp}.wav",
+        stt_model="sensevoice",
+        translate_model="opus-mt-en-zh",
         translate_to="Chinese",
         max_segment_duration=10.0,
     )
