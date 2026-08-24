@@ -6,19 +6,15 @@ Benchmarks local STT models against gold-reference transcripts:
 - Wall-clock decode time and RTF (decode time / audio duration)
 - Peak RSS
 - Segments (start/end/text) per sample, when the model exposes them
-- Streaming decode (--stream): per-update (stream_time, wall_time, text)
-  tail-latency analysis. Dormant since 2026-08-24 — Moonshine (the only
-  stream-capable model) was dropped from the product; the hooks stay for a
-  future streaming model (e.g. a sherpa-onnx online-recognizer probe).
 
 Usage:
-  uv run python -m interpreter.benchmark --list                          # stt models + samples
-  uv run python -m interpreter.benchmark                                 # all stt models
-  uv run python -m interpreter.benchmark parakeet-tdt-0.6b-v2 sensevoice
-  uv run python -m interpreter.benchmark --samples sample_a1
-  uv run python -m interpreter.benchmark --task translate                # all en->zh models
-  uv run python -m interpreter.benchmark --task translate opus-mt-en-zh
-  uv run python -m interpreter.benchmark --record mode_b_1.wav 30  # host only (mic)
+  uv run python -m interpreter benchmark --list                  # stt models + samples
+  uv run python -m interpreter benchmark                         # all stt models
+  uv run python -m interpreter benchmark parakeet-tdt-0.6b-v2 sensevoice
+  uv run python -m interpreter benchmark --samples sample_a1
+  uv run python -m interpreter benchmark --task translate        # all en->zh models
+  uv run python -m interpreter benchmark --task translate opus-mt-en-zh
+  uv run python -m interpreter benchmark --record mode_b_1.wav 30  # host only (mic)
 
 Default runs load one model per subprocess (load -> benchmark -> write JSON
 -> exit, memory fully released -> next model). A model killed by OOM
@@ -219,64 +215,13 @@ class Adapter:
     name = ""
     tier = ""  # en-only | multilingual
     modes: tuple[str, ...] = ("A", "B")  # sample modes this model can transcribe
-    stream_capable = False
     weight_note = ""
 
     def __init__(self) -> None:
         self.load_s = 0.0
 
-    def transcribe(self, sample: Sample, use_stream: bool = False) -> tuple[str, dict]:
+    def transcribe(self, sample: Sample) -> tuple[str, dict]:
         raise NotImplementedError
-
-    def stream_info(self, sample: Sample) -> dict:
-        raise NotImplementedError
-
-
-class _FasterWhisper(Adapter):
-    def __init__(self, model_size: str = "large-v3") -> None:
-        super().__init__()
-        import faster_whisper
-
-        t0 = time.perf_counter()
-        self.model = faster_whisper.WhisperModel(
-            model_size, device="cpu", compute_type="int8"
-        )
-        self.load_s = time.perf_counter() - t0
-
-    def transcribe(self, sample: Sample, use_stream: bool = False):
-        t0 = time.perf_counter()
-        segments, _ = self.model.transcribe(
-            str(TRANSCRIBE_DIR / sample.path),
-            beam_size=5,
-            language=sample.lang if sample.lang == "en" else None,
-        )
-        segs = list(segments)
-        wall = time.perf_counter() - t0
-        out = [(s.start, s.end, s.text.strip()) for s in segs]
-        text = " ".join(t for _, _, t in out)
-        return text, {"segments": out, "wall": wall}
-
-
-class _OpenAIWhisper(Adapter):
-    """Original openai-whisper (torch, fp32) — the model_comparison.py classic."""
-
-    def __init__(self, model_size: str = "small") -> None:
-        super().__init__()
-        import whisper
-
-        t0 = time.perf_counter()
-        self.model = whisper.load_model(model_size)
-        self.load_s = time.perf_counter() - t0
-
-    def transcribe(self, sample: Sample, use_stream: bool = False):
-        audio, sr = sf.read(str(TRANSCRIBE_DIR / sample.path), dtype="float32")
-        assert sr == 16000, (sample.id, sr)
-        t0 = time.perf_counter()
-        result = self.model.transcribe(audio, temperature=0.0, beam_size=1)
-        wall = time.perf_counter() - t0
-        text = result["text"].strip()
-        segs = [(s["start"], s["end"], s["text"].strip()) for s in result["segments"]]
-        return text, {"segments": segs, "wall": wall}
 
 
 def _onnxruntime_capi_dir() -> Path | None:
@@ -329,7 +274,7 @@ class _Sherpa(Adapter):
         self.recognizer = getattr(sherpa_onnx.OfflineRecognizer, factory)(**kwargs)
         self.load_s = time.perf_counter() - t0
 
-    def transcribe(self, sample: Sample, use_stream: bool = False):
+    def transcribe(self, sample: Sample):
         audio, sr = sf.read(str(TRANSCRIBE_DIR / sample.path), dtype="float32")
         stream = self.recognizer.create_stream()
         stream.accept_waveform(sr, audio)
@@ -348,94 +293,6 @@ class _Sherpa(Adapter):
             ]
         text = result.text
         return text, {"segments": segments, "wall": wall}
-
-
-class _ArkAsr(Adapter):
-    """ARK-ASR-0.6B (AutoArk, 2026) — multilingual zh/en ASR via transformers.
-
-    Apache-2.0; published size 0.6B (decoder LLM) — the ≤1B policy counts
-    published size, so the ~1.2B end-to-end (0.6B decoder + 0.6B audio
-    encoder) is flagged, not excluded (docs/benchmark.md). trust_remote_code;
-    audio via the chat template, greedy generation with bad-token filtering.
-    """
-
-    name = "ark-asr-0.6b"
-    tier = "multilingual"
-    modes = ("A", "B")
-    weight_note = "Apache-2.0; 0.6B decoder + 0.6B encoder (e2e ~1.2B, policy counts published size)"
-
-    def __init__(self) -> None:
-        super().__init__()
-        import torch
-        from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-
-        t0 = time.perf_counter()
-        self.processor: Any = AutoProcessor.from_pretrained(
-            "AutoArk-AI/ARK-ASR-0.6B", trust_remote_code=True
-        )
-        self.tokenizer: Any = AutoTokenizer.from_pretrained(
-            "AutoArk-AI/ARK-ASR-0.6B", trust_remote_code=True
-        )
-        self.model: Any = AutoModelForCausalLM.from_pretrained(
-            "AutoArk-AI/ARK-ASR-0.6B",
-            trust_remote_code=True,
-            torch_dtype=torch.float32,
-            attn_implementation="sdpa",
-        )
-        self.model.eval()
-        self._bad_words_ids = self._build_bad_words_ids(self.tokenizer)
-        self.load_s = time.perf_counter() - t0
-
-    @staticmethod
-    def _build_bad_words_ids(tokenizer) -> list[list[int]]:
-        eos_ids = tokenizer.eos_token_id
-        keep_ids = {eos_ids} if isinstance(eos_ids, int) else set(eos_ids or [])
-        bad_ids = set(tokenizer.all_special_ids) - keep_ids
-        bad_ids.update(
-            token_id
-            for token, token_id in tokenizer.get_added_vocab().items()
-            if token.startswith("<")
-            and token.endswith(">")
-            and token_id not in keep_ids
-        )
-        return [[token_id] for token_id in sorted(bad_ids)]
-
-    def transcribe(self, sample: Sample, use_stream: bool = False):
-        import torch
-
-        conversation = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "audio", "path": str(TRANSCRIBE_DIR / sample.path)},
-                    {"type": "text", "text": "Please transcribe this audio."},
-                ],
-            }
-        ]
-        inputs = self.processor.apply_chat_template(
-            conversation,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            sampling_rate=16000,
-            audio_padding="longest",
-            text_kwargs={"padding": "longest"},
-            audio_max_length=30 * 16000,
-        )
-        t0 = time.perf_counter()
-        with torch.inference_mode():
-            outputs = self.model.generate(
-                **inputs,
-                do_sample=False,
-                max_new_tokens=256,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-                bad_words_ids=self._bad_words_ids,
-            )
-        wall = time.perf_counter() - t0
-        decoded = self.tokenizer.batch_decode(
-            outputs[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
-        )
-        return (decoded[0] if decoded else "").strip(), {"segments": None, "wall": wall}
 
 
 # ---------------------------------------------------------------------------
@@ -576,22 +433,7 @@ def _download_model_files(name: str) -> None:
 
 def make_adapter(name: str) -> Adapter:
     t0 = time.perf_counter()
-    if name in (
-        "faster-whisper-small",
-        "faster-whisper-medium",
-    ):
-        adapter = _FasterWhisper(name.removeprefix("faster-whisper-"))
-        adapter.name = name
-        adapter.tier = "multilingual"
-        adapter.weight_note = "int8, beam 5"
-    elif name == "whisper-small":
-        adapter = _OpenAIWhisper("small")
-        adapter.name = name
-        adapter.tier = "multilingual"
-        adapter.weight_note = "openai-whisper (torch, fp32)"
-    elif name == "ark-asr-0.6b":
-        adapter = _ArkAsr()
-    elif name in _MODEL_FILES:
+    if name in _MODEL_FILES:
         spec = _MODEL_FILES[name]
         _download_model_files(name)
         adapter = _Sherpa(name, spec.files, spec.factory, spec.factory_kwargs)
@@ -607,16 +449,12 @@ def make_adapter(name: str) -> Adapter:
 
 def available_models() -> list[str]:
     return [
-        "whisper-small",
-        "faster-whisper-small",
-        "faster-whisper-medium",
         "parakeet-tdt-0.6b-v2",
         "parakeet-tdt-0.6b-v3",
         "dolphin-small",
         "funasr-nano-2512",
         "sensevoice",
         "qwen3-asr-0.6b",
-        "ark-asr-0.6b",
     ]
 
 
@@ -625,7 +463,7 @@ def available_models() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def run_model(model_name: str, samples: list[Sample], use_stream: bool) -> dict:
+def run_model(model_name: str, samples: list[Sample]) -> dict:
     print(f"\n=== {model_name} ===")
     try:
         adapter = make_adapter(model_name)
@@ -649,16 +487,10 @@ def run_model(model_name: str, samples: list[Sample], use_stream: bool) -> dict:
             )
             continue
         try:
-            if use_stream and adapter.stream_capable:
-                info = adapter.stream_info(sample)
-                segments = info["segments"]
-                wall = info["wall"]
-                hyp = " ".join(t for _, _, t in (segments or []))
-            else:
-                text, info = adapter.transcribe(sample)
-                hyp = text
-                wall = info["wall"]
-                segments = info["segments"]
+            text, info = adapter.transcribe(sample)
+            hyp = text
+            wall = info["wall"]
+            segments = info["segments"]
             wer, cer = _wer_cer(sample.ref, hyp)
             rows.append(
                 {
@@ -672,7 +504,6 @@ def run_model(model_name: str, samples: list[Sample], use_stream: bool) -> dict:
                     "rtf": wall / sample.duration() if sample.duration() else None,
                     "hyp": hyp,
                     "segments": segments,
-                    "updates": info.get("updates") if use_stream else None,
                 }
             )
             print(
@@ -760,9 +591,7 @@ def _print_merged(rows: list[dict]) -> None:
         )
 
 
-def _run_isolated(
-    name: str, task: str, sample_ids: list[str], use_stream: bool
-) -> tuple[dict, int]:
+def _run_isolated(name: str, task: str, sample_ids: list[str]) -> tuple[dict, int]:
     """Run one model in a fresh subprocess so its memory is fully released."""
     import subprocess
 
@@ -784,8 +613,6 @@ def _run_isolated(
     ]
     if task == "stt":
         cmd += ["--samples", *sample_ids]
-    if use_stream:
-        cmd.append("--stream")
     env = None
     capi = _onnxruntime_capi_dir()
     if capi is not None:
@@ -949,9 +776,6 @@ def main() -> None:
         help="benchmark task (default: stt)",
     )
     parser.add_argument("--samples", nargs="*", help="sample ids (default: all)")
-    parser.add_argument(
-        "--stream", action="store_true", help="streaming decode where supported"
-    )
     parser.add_argument("--list", action="store_true", help="list models and samples")
     parser.add_argument(
         "--in-process",
@@ -1016,7 +840,7 @@ def main() -> None:
                 out.write_text(json.dumps(result, indent=2, ensure_ascii=False))
             else:
                 print(f"\n=== {name} (isolated subprocess) ===")
-                result, code = _run_isolated(name, "translate", [], args.stream)
+                result, code = _run_isolated(name, "translate", [])
                 if code in (-9, 137):
                     print(f"  {result['error']}")
             print(f"  -> {TRANSLATE_RESULTS_DIR / f'{name}.json'}")
@@ -1033,16 +857,14 @@ def main() -> None:
     single = len(names) == 1
     for name in names:
         if args.in_process or single:
-            result = run_model(name, samples, args.stream)
+            result = run_model(name, samples)
             if "error" in result and "samples" not in result:
                 continue
             out = TRANSCRIBE_RESULTS_DIR / f"{name}.json"
             out.write_text(json.dumps(result, indent=2, ensure_ascii=False))
         else:
             print(f"\n=== {name} (isolated subprocess) ===")
-            result, code = _run_isolated(
-                name, "stt", [s.id for s in samples], args.stream
-            )
+            result, code = _run_isolated(name, "stt", [s.id for s in samples])
             if code in (-9, 137):
                 print(f"  {result['error']}")
         print(f"  -> {TRANSCRIBE_RESULTS_DIR / f'{name}.json'}")

@@ -8,7 +8,8 @@ Quick start (defaults: SenseVoice STT + opus-mt-en-zh translation):
     rtt.run()                       # live mic; Ctrl+C to stop
     rtt.evaluate()                  # WER/CER vs full-file reference (needs audio_file_path)
 
-Model selection:
+Model selection (the CLI picks models internally per task — see __main__.py;
+the library still accepts explicit names):
 
     RealTimeTranscribe(stt_model="sensevoice")             # default; zh<->en code-switching
     RealTimeTranscribe(stt_model="parakeet-tdt-0.6b-v2")   # best en-only accuracy
@@ -24,25 +25,29 @@ Record a session for later evaluation:
 
 Standalone use (no mic): transcribe a 16 kHz mono file or array directly
 
-    from interpreter.transcribe import SpeechToText, Translator
+    from interpreter.transcribe import SpeechToText
+    from interpreter.translate import Translator
 
     stt = SpeechToText("sensevoice")            # or "parakeet-tdt-0.6b-v2"
     text = stt.extract_text(stt.transcribe_file("clip.wav"))
     print(Translator().translate(text))         # opus-mt-en-zh -> Chinese
 
-CLI: `python -m interpreter.transcribe` runs live dictation with the defaults
-(STT = sensevoice, translate = opus-mt-en-zh, output to data/transcribe_<ts>.wav).
-Model picks follow the Phase 1 conclusion (docs/benchmark.md); weights download
-anonymously from HF on first use.
+CLI: `uv run python -m interpreter listen|dictate` runs live dictation (see
+__main__.py). Model picks follow the Phase 1 conclusion (docs/benchmark.md);
+weights download anonymously from HF on first use.
 """
 
 from __future__ import annotations
 
 import collections
-import datetime
+import importlib.util
+import math
 import queue
+import shutil
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import noisereduce as nr
@@ -53,6 +58,91 @@ import torch
 from jiwer import cer, wer
 
 from interpreter import DATA_DIR
+from interpreter.translate import Translator
+
+STT_MODEL_EN_ONLY = "parakeet-tdt-0.6b-v2"
+STT_MODEL_MIXED = "sensevoice"
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def _sentence_case(text: str) -> str:
+    """Capitalize the first letter found in a segment; leave the rest lowercase."""
+    for i, ch in enumerate(text):
+        if ch.isalpha():
+            return text[:i] + ch.upper() + text[i + 1 :]
+    return text
+
+
+def _normalize_sensevoice_case(text: str) -> str:
+    """SenseVoice emits English in ALL CAPS (a model artifact; parakeet and the
+    Chinese portions are unaffected) — lowercase and sentence-case each segment."""
+    return _sentence_case(text.lower())
+
+MODELS_DIR = DATA_DIR / "benchmark" / "transcribe" / "models"
+
+MODEL_SPECS: dict[str, dict] = {
+    "parakeet-tdt-0.6b-v2": {
+        "repo": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+        "files": {
+            "encoder": "encoder.int8.onnx",
+            "decoder": "decoder.int8.onnx",
+            "joiner": "joiner.int8.onnx",
+            "tokens": "tokens.txt",
+        },
+        "factory": "from_transducer",
+        "kwargs": {"model_type": "nemo_transducer"},
+    },
+    "sensevoice": {
+        "repo": "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+        "files": {
+            "model": "model.int8.onnx",
+            "tokens": "tokens.txt",
+        },
+        "factory": "from_sense_voice",
+        "kwargs": {"use_itn": True},
+    },
+}
+
+
+def _download_model_files(name: str) -> None:
+    spec = MODEL_SPECS[name]
+    dest = MODELS_DIR / name
+    if (dest / ".complete").exists():
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    from huggingface_hub import hf_hub_download
+
+    for rel in spec["files"].values():
+        hf_hub_download(spec["repo"], rel, repo_type="model", local_dir=dest)
+    (dest / ".complete").touch()
+
+
+def _ensure_onnxruntime_dylib() -> None:
+    """macOS only: sherpa-onnx wheels don't bundle onnxruntime — dlopen of
+    `@rpath/libonnxruntime.<ver>.dylib` fails (docs/benchmark.md). Copy the
+    dylibs from the installed onnxruntime package into the sherpa package's
+    lib dir — the first @rpath search location. dyld reads DYLD_* at exec
+    time, so a runtime env tweak can't fix this."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import onnxruntime
+
+        spec = importlib.util.find_spec("sherpa_onnx")
+        if spec is None or not spec.submodule_search_locations:
+            return
+        sherpa_lib = Path(spec.submodule_search_locations[0]) / "lib"
+        sherpa_lib.mkdir(parents=True, exist_ok=True)
+        capi = Path(onnxruntime.__file__).parent / "capi"
+        for src in capi.glob("libonnxruntime*.dylib"):
+            dest = sherpa_lib / src.name
+            if not dest.exists():
+                shutil.copy2(src, dest)
+    except Exception:  # noqa: S110, BLE001 - best-effort fix; surface the real import error
+        pass
 
 
 class VAD:
@@ -67,6 +157,7 @@ class VAD:
             model="silero_vad",
             force_reload=False,
             onnx=False,
+            trust_repo=True,
         )
 
     def is_speech(self, frame):
@@ -77,30 +168,105 @@ class VAD:
         return speech_prob > self.speech_threshold
 
 
-class Translator:
-    """en->zh translation — opus-mt-en-zh (Helsinki-NLP seq2seq), the only backend.
+class SherpaSegment:
+    """Minimal segment object for the display layer (`.text`, `.probability`,
+    `.t0`, `.t1`). Sherpa exposes no per-token log-probs for SenseVoice, so
+    its `probability` is 1.0; transducer models (parakeet) expose `tokens` +
+    `ys_log_probs`, which `_word_probs_from_result` groups into `word_probs` —
+    (word, prob) pairs the real-time display colors per word."""
 
-    Dedicated NMT: deterministic, best BLEU on the benchmark corpus (33.59,
-    docs/benchmark.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
-    quality mode was dropped 2026-08-24 — live dictation showed hallucinated
-    content and a meaning-reversed error (PLAN.md, docs/benchmark.md).
+    def __init__(
+        self,
+        text: str,
+        probability: float = 1.0,
+        t0: float = 0.0,
+        t1: float = 0.0,
+        word_probs: list[tuple[str, float]] | None = None,
+    ) -> None:
+        self.text = text
+        self.probability = probability
+        self.t0 = t0
+        self.t1 = t1
+        self.word_probs = word_probs
+
+
+def _word_probs_from_result(result: Any) -> list[tuple[str, float]] | None:
+    """Per-word confidence from sherpa's per-token data, or None when the
+    model exposes none (SenseVoice). Transducer tokens may or may not carry
+    leading spaces (observed both on the same model), so words are grouped by
+    cumulative character length against the words of `result.text`; a word's
+    probability is exp(mean of its token log-probs)."""
+    tokens = list(getattr(result, "tokens", None) or [])
+    scores = list(getattr(result, "ys_log_probs", None) or [])
+    if not tokens or len(scores) != len(tokens):
+        return None
+    text_words = [w for w in (result.text or "").split() if w]
+    if not text_words:
+        return None
+    flat = "".join(t.strip() for t in tokens)
+    if flat != "".join(text_words):
+        return None
+    words: list[tuple[str, float]] = []
+    cur: list[str] = []
+    cur_scores: list[float] = []
+    target_len = len(text_words[0])
+    acc = 0
+    ti = 0
+    for tok, score in zip(tokens, scores):
+        stripped = tok.strip()
+        if not stripped:
+            continue
+        cur.append(stripped)
+        cur_scores.append(score)
+        acc += len(stripped)
+        if acc >= target_len:
+            words.append(("".join(cur), math.exp(sum(cur_scores) / len(cur_scores))))
+            cur, cur_scores = [], []
+            acc = 0
+            ti += 1
+            target_len = len(text_words[ti]) if ti < len(text_words) else 0
+    return words or None
+
+
+class SherpaStt:
+    """Offline sherpa-onnx recognizer over raw 16 kHz mono float32 audio.
+
+    Model choice (docs/benchmark.md, 2026-08-24): en-only ->
+    parakeet-tdt-0.6b-v2, mixed -> sensevoice; both sherpa-onnx int8
+    (whisper.cpp/Moonshine dropped). Weights download anonymously from HF.
     """
 
-    def __init__(self, model="opus-mt-en-zh", target_lang="Chinese"):
-        self.model = model
-        self.target_lang = target_lang
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+    def __init__(self, model_name: str, num_threads: int = 4) -> None:
+        spec = MODEL_SPECS[model_name]
+        self.model_name = model_name
+        _download_model_files(model_name)
+        _ensure_onnxruntime_dylib()
+        import sherpa_onnx
 
-        model_id = f"Helsinki-NLP/{model}"
-        self._nmt_tokenizer: Any = AutoTokenizer.from_pretrained(model_id)
-        self._nmt_model: Any = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        kwargs: dict[str, object] = {
+            key: str(MODELS_DIR / model_name / rel)
+            for key, rel in spec["files"].items()
+        }
+        kwargs.update(spec.get("kwargs", {}))
+        kwargs["num_threads"] = num_threads
+        self.recognizer: Any = getattr(sherpa_onnx.OfflineRecognizer, spec["factory"])(
+            **kwargs
+        )
 
-    def translate(self, text: str) -> str:
-        if not text.strip():
-            return ""
-        inputs = self._nmt_tokenizer(text, return_tensors="pt", truncation=True)
-        out = self._nmt_model.generate(**inputs, max_length=256)
-        return self._nmt_tokenizer.decode(out[0], skip_special_tokens=True).strip()
+    def transcribe(self, audio: np.ndarray) -> list[SherpaSegment]:
+        stream = self.recognizer.create_stream()
+        stream.accept_waveform(16000, audio.astype(np.float32))
+        self.recognizer.decode_stream(stream)
+        result = stream.result
+        text = result.text.strip()
+        if not text:
+            return []
+        return [SherpaSegment(text, word_probs=_word_probs_from_result(result))]
+
+    def transcribe_file(self, path: str | Path) -> list[SherpaSegment]:
+        audio, sr = sf.read(str(path), dtype="float32")
+        assert sr == 16000, f"expected 16 kHz audio, got {sr}"
+        return self.transcribe(audio)
 
 
 def process_audio_segment(full_segment, sample_rate):
@@ -124,14 +290,12 @@ class SpeechToText:
       - "parakeet-tdt-0.6b-v2"  en-only / listen option (sherpa int8 transducer)
 
     Per-word confidence coloring: the sherpa transducer (parakeet) exposes
-    per-token log-probs, grouped into word probs in sherpa_stt.py.
+    per-token log-probs, grouped into word probs in _word_probs_from_result.
     SenseVoice exposes no per-token scores in sherpa-onnx 1.13.0 — its
     output is uncolored (uniform), a known limitation (docs/benchmark.md).
     """
 
     def __init__(self, model_name):
-        from interpreter.sherpa_stt import SherpaStt
-
         self.model_name = model_name
         self.model: Any = SherpaStt(model_name)
 
@@ -143,21 +307,26 @@ class SpeechToText:
         return self.model.transcribe_file(str(file_path))
 
     def extract_text(self, result):
-        return " ".join([i.text for i in result]).strip()
+        text = " ".join([i.text for i in result]).strip()
+        if self.model_name == "sensevoice":
+            text = _normalize_sensevoice_case(text)
+        return text
 
 
 class RealTimeTranscribe:
     def __init__(
         self,
         audio_file_path=None,
-        stt_model="sensevoice",
+        stt_model=STT_MODEL_MIXED,
         translate_model="opus-mt-en-zh",
         translate_to="Chinese",
         max_segment_duration=5.0,
+        plain_output=False,
     ):
         self.audio_file_path = audio_file_path
         self.stt_model = stt_model
         self.translate_to = translate_to
+        self.plain_output = plain_output
         self.max_segment_duration = max_segment_duration
         self.sample_rate = 16000
         self.frame_size = 512
@@ -262,13 +431,16 @@ class RealTimeTranscribe:
         if not (isinstance(result, list) and result):
             return
         transcript = self.stt.extract_text(result)
-        formated_transcript = self._format_transcript(result)
         time_str = self._get_time_str()
         self.transcript.append(transcript)
-        duration = (
-            f" ({transcription_time:.4f}s)" if transcription_time is not None else ""
-        )
-        print(f"[{time_str}] {formated_transcript}{duration}", flush=True)
+        if self.plain_output:
+            print(transcript, flush=True)
+        else:
+            formated_transcript = self._format_transcript(result)
+            duration = (
+                f" ({transcription_time:.4f}s)" if transcription_time is not None else ""
+            )
+            print(f"[{time_str}] {formated_transcript}{duration}", flush=True)
         if self.translator:
             self.q_for_translation.put(transcript)
 
@@ -288,6 +460,12 @@ class RealTimeTranscribe:
     def _get_time_str(self):
         elapsed = time.time() - self.start_time
         return f"{int(elapsed // 60):02d}:{elapsed % 60:06.3f}"
+
+    def _print_clean_transcript(self):
+        if not self.transcript:
+            return
+        print("\nTranscript:")
+        print("\n".join(self.transcript))
 
     def _transcription_worker(self):
         while self.running:
@@ -372,6 +550,8 @@ class RealTimeTranscribe:
         except KeyboardInterrupt:
             print("\nStopping...")
             self._stop()
+            if self.plain_output:
+                self._print_clean_transcript()
 
     def evaluate(self):
         if self.audio_file_path is None:
@@ -380,38 +560,25 @@ class RealTimeTranscribe:
         result = self.stt.transcribe_file(str(self.audio_file_path))
         self.reference_transcript = self.stt.extract_text(result)
         self.realtime_transcript = " ".join(self.transcript).strip()
-        wer_error = wer(
-            self.reference_transcript.lower(), self.realtime_transcript.lower()
-        )
         cer_error = cer(
             self.reference_transcript.lower(), self.realtime_transcript.lower()
         )
-        print(f"Word Error Rate (WER): {wer_error:.2%}")
         print(f"Character Error Rate (CER): {cer_error:.2%}")
+        metrics = {"CER": cer_error}
+        # WER only makes sense on whitespace-segmented text (English). On
+        # unsegmented Chinese/mixed it compares chars vs segments and explodes
+        # (docs/benchmark.md scores zh with CER for this reason), so skip it.
+        if not (
+            _contains_cjk(self.reference_transcript)
+            or _contains_cjk(self.realtime_transcript)
+        ):
+            wer_error = wer(
+                self.reference_transcript.lower(), self.realtime_transcript.lower()
+            )
+            print(f"Word Error Rate (WER): {wer_error:.2%}")
+            metrics["WER"] = wer_error
+        else:
+            print("Word Error Rate (WER): N/A (Chinese/mixed — use CER)")
         print(f"Reference Transcript: {self.reference_transcript}")
         print(f"Realtime Transcript: {self.realtime_transcript}")
-        return {"WER": wer_error, "CER": cer_error}
-
-
-if __name__ == "__main__":
-    timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
-
-    # Phase 1 conclusion defaults (docs/benchmark.md, 2026-08-24):
-    #   per-mode target: listen -> parakeet-tdt-0.6b-v2, dictate -> sensevoice;
-    #   streaming (Moonshine) dropped 2026-08-24 — sherpa online recognizer
-    #   probe is the future streaming path (Phase 2). Until Phase 2 wires
-    #   per-mode config, the product default is sensevoice (best code-switcher,
-    #   fastest+lightest)
-    #   + opus-mt-en-zh (dedicated NMT, best BLEU; qwen LLM quality mode dropped
-    #   2026-08-24 — see PLAN.md).
-    self = RealTimeTranscribe(
-        audio_file_path=DATA_DIR / f"transcribe_{timestamp}.wav",
-        stt_model="sensevoice",
-        translate_model="opus-mt-en-zh",
-        translate_to="Chinese",
-        max_segment_duration=10.0,
-    )
-
-    self.run()
-
-    self.evaluate()
+        return metrics
