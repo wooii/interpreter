@@ -261,7 +261,7 @@ def _ensure_onnxruntime_lib() -> None:
 
 
 class _Sherpa(Adapter):
-    """Offline sherpa-onnx models (Parakeet TDT, Dolphin CTC, Fun-ASR-Nano,
+    """Offline sherpa-onnx models (Parakeet Unified, Dolphin CTC, Fun-ASR-Nano,
     SenseVoice, Qwen3-ASR)."""
 
     def __init__(
@@ -333,19 +333,6 @@ _MODEL_FILES: dict[str, _SherpaSpec] = {
         factory_kwargs={"model_type": "nemo_transducer"},
         tier="en-only",
         weight_note="int8 NeMo transducer (offline mode of the unified model)",
-    ),
-    "parakeet-tdt-0.6b-v3": _SherpaSpec(
-        repo="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        files={
-            "encoder": "encoder.int8.onnx",
-            "decoder": "decoder.int8.onnx",
-            "joiner": "joiner.int8.onnx",
-            "tokens": "tokens.txt",
-        },
-        factory="from_transducer",
-        factory_kwargs={"model_type": "nemo_transducer"},
-        tier="en-only",
-        weight_note="int8 NeMo transducer; 25 EU langs, auto lang-detect (no zh)",
     ),
     "dolphin-small": _SherpaSpec(
         repo=None,
@@ -456,7 +443,6 @@ def make_adapter(name: str) -> Adapter:
 def available_models() -> list[str]:
     return [
         "parakeet-unified-en-0.6b",
-        "parakeet-tdt-0.6b-v3",
         "dolphin-small",
         "funasr-nano-2512",
         "sensevoice",

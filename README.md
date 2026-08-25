@@ -5,7 +5,7 @@ A real-time, fully local transcription assistant with optional translation — b
 ## Key Features
 
 - Real-time continuous local transcription, with per-word confidence color coding (listen)
-- **Auto speaker ID in listen mode** — each segment is automatically tagged `[self]` / `[other]` / `[speaker N]` as voices appear (no enrollment step; WeSpeaker, fully local); segments that can't be confidently matched are flagged `[?]` instead of being mislabeled, and a close-but-distinct voice is promoted to `[other]` once it forms a consistent cluster
+- **Auto speaker ID in listen mode** — each segment is automatically tagged `[self]` / `[other]` as voices appear (no enrollment step; WeSpeaker, fully local); segments that can't be confidently matched are flagged `[?]` instead of being mislabeled, and a close-but-distinct voice is promoted to `[other]` once it forms a consistent cluster
 - Adaptive re-transcription: as each utterance arrives, earlier text is re-decoded with more context and self-corrects on the fly (growing-context re-decode — no true streaming in the current models)
 - Optional live local translation
 - Mixed language (zh/en) dictation
@@ -17,7 +17,7 @@ One pipeline (mic → VAD → adaptive-window STT → optional translation), two
 
 | Mode | Who speaks | What comes out |
 |------|------------|----------------|
-| **listen** | Others (English) | English transcript + Chinese translation, colored + timestamped lines, auto speaker tags (`[self]` / `[other]` / `[speaker N]`; `[?]` when a voice can't be confidently matched) |
+| **listen** | Others (English) | English transcript + Chinese translation, colored + timestamped lines, auto speaker tags (`[self]` / `[other]`; `[?]` when a voice can't be confidently matched) |
 | **dictate** | Self (zh/en mixed) | Clean mixed-language dictation, one self-correcting line |
 
 ## Requirements
@@ -48,7 +48,7 @@ uv run python -m interpreter dictate --en          # dictation, English only
 uv run python -m interpreter benchmark --list      # benchmark harness
 ```
 
-The first run downloads the STT model weights (sherpa-onnx int8: `sensevoice` for mixed, `parakeet-unified-en-0.6b` for en-only) and the en→zh translation model anonymously from Hugging Face.
+The first run downloads the STT model weights (sherpa-onnx int8: `sensevoice` for mixed, `parakeet-unified-en-0.6b` for en-only) and the en→zh translation model `opus-mt-en-zh` anonymously from Hugging Face.
 
 ## Roadmap
 
