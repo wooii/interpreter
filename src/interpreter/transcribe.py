@@ -23,6 +23,9 @@ Record a session for later evaluation:
     rtt.run()                       # writes session.wav on stop
     rtt.evaluate()                  # WER/CER of the live transcript vs offline re-transcribe
 
+Any path is accepted (format inferred from the suffix); .flac is written as
+int16 PCM. The transcript is saved as a plain-text .txt next to the audio file.
+
 Standalone use (no mic): transcribe a 16 kHz mono file or array directly
 
     from interpreter.transcribe import SpeechToText
@@ -33,7 +36,7 @@ Standalone use (no mic): transcribe a 16 kHz mono file or array directly
     print(Translator().translate(text))         # opus-mt-en-zh -> Chinese
 
 CLI: `uv run python -m interpreter listen|dictate` runs live dictation (see
-__main__.py). Model picks follow the Phase 1 conclusion (_archive/benchmark-2026-08-24.md);
+__main__.py). Model picks follow the Phase 1 conclusion (_archive/benchmark_transcribe.md);
 weights download anonymously from HF on first use.
 """
 
@@ -58,6 +61,7 @@ import torch
 from jiwer import cer, wer
 
 from interpreter import DATA_DIR
+from interpreter.speaker import UNCERTAIN, SpeakerAssigner
 from interpreter.translate import Translator
 
 STT_MODEL_EN_ONLY = "parakeet-tdt-0.6b-v2"
@@ -143,6 +147,29 @@ def _strip_prefix(full: str, prefix: str) -> str:
     return full[i:].lstrip()
 
 
+def _strip_styled_prefix(styled: str, n_visible: int) -> str:
+    """Colored suffix of a colored string after the first `n_visible` visible
+    (non-space) characters, preserving the ANSI per-word coloring. `styled`'s
+    visible characters match the plain text's, so the same cut applies to
+    both (the slide baseline's tail must stay colored — the "color coding is
+    broken" report)."""
+    i = 0
+    seen = 0
+    n = len(styled)
+    while i < n and seen < n_visible:
+        if styled.startswith("\x1b[", i):
+            j = styled.index("m", i)
+            i = j + 1
+        elif styled[i].isspace():
+            i += 1
+        else:
+            seen += 1
+            i += 1
+    while i < n and styled[i].isspace():
+        i += 1
+    return styled[i:]
+
+
 def _chunk_punct(text: str) -> str:
     """Sentence-ending punctuation for dictation. SenseVoice emits none.
     English chunks get a period; Chinese chunks get none — the space in the
@@ -210,7 +237,7 @@ def _download_model_files(name: str) -> None:
 
 def _ensure_onnxruntime_dylib() -> None:
     """macOS only: sherpa-onnx wheels don't bundle onnxruntime — dlopen of
-    `@rpath/libonnxruntime.<ver>.dylib` fails (_archive/benchmark-2026-08-24.md). Copy the
+    `@rpath/libonnxruntime.<ver>.dylib` fails (_archive/benchmark_transcribe.md). Copy the
     dylibs from the installed onnxruntime package into the sherpa package's
     lib dir — the first @rpath search location. dyld reads DYLD_* at exec
     time, so a runtime env tweak can't fix this."""
@@ -331,7 +358,7 @@ def _word_probs_from_result(result: Any) -> list[tuple[str, float]] | None:
 class SherpaStt:
     """Offline sherpa-onnx recognizer over raw 16 kHz mono float32 audio.
 
-    Model choice (_archive/benchmark-2026-08-24.md, 2026-08-24): en-only ->
+    Model choice (_archive/benchmark_transcribe.md, 2026-08-24): en-only ->
     parakeet-tdt-0.6b-v2, mixed -> sensevoice; both sherpa-onnx int8
     (whisper.cpp/Moonshine dropped). Weights download anonymously from HF.
     """
@@ -379,9 +406,9 @@ def process_audio_segment(full_segment, sample_rate):
 
 
 class SpeechToText:
-    """STT backend dispatch — Phase 1 model-selection winners (_archive/benchmark-2026-08-24.md).
+    """STT backend dispatch — Phase 1 model-selection winners (_archive/benchmark_transcribe.md).
     Sherpa-onnx int8 only since 2026-08-24 (whisper.cpp and Moonshine both
-    dropped — see _archive/benchmark-2026-08-24.md for the reasons).
+    dropped — see _archive/benchmark_transcribe.md for the reasons).
 
     model_name:
       - "sensevoice"            product default (sherpa int8; dictate/multilingual winner)
@@ -390,7 +417,7 @@ class SpeechToText:
     Per-word confidence coloring: the sherpa transducer (parakeet) exposes
     per-token log-probs, grouped into word probs in _word_probs_from_result.
     SenseVoice exposes no per-token scores in sherpa-onnx 1.13.0 — its
-    output is uncolored (uniform), a known limitation (_archive/benchmark-2026-08-24.md).
+    output is uncolored (uniform), a known limitation (_archive/benchmark_transcribe.md).
     """
 
     def __init__(self, model_name):
@@ -420,16 +447,19 @@ class RealTimeTranscribe:
         translate_to="Chinese",
         max_segment_duration=5.0,
         clean=False,
-        max_window_seconds=60.0,
+        max_window_seconds=8.0,
+        max_window_segments=3,
+        speaker_id=False,
     ):
         self.audio_file_path = audio_file_path
         self.clean = clean
         self.max_window_seconds = max_window_seconds
+        self.max_window_segments = max_window_segments
         self.max_segment_duration = max_segment_duration
         self.sample_rate = 16000
         self.frame_size = 512
-        self.vad, self.translator, self.stt = self._load_models(
-            stt_model, translate_model, translate_to
+        self.vad, self.translator, self.stt, self.speaker = self._load_models(
+            stt_model, translate_model, translate_to, speaker_id
         )
         self.stt_model_name = self.stt.model_name
         self._initialize_state()
@@ -438,9 +468,9 @@ class RealTimeTranscribe:
             self.max_segment_duration * self.sample_rate / self.frame_size
         )
 
-    def _load_models(self, stt_model, translate_model, translate_to):
-        """VAD / Translator / STT are independent model stacks — load them
-        concurrently so startup waits for the slowest load, not their sum.
+    def _load_models(self, stt_model, translate_model, translate_to, speaker_id):
+        """VAD / Translator / STT / Speaker are independent model stacks — load
+        them concurrently so startup waits for the slowest load, not their sum.
         Failures surface in the main thread after the workers join."""
         loaded: dict[str, Any] = {}
         errors: list[BaseException] = []
@@ -471,6 +501,10 @@ class RealTimeTranscribe:
                 target=_load,
                 args=("stt", lambda: SpeechToText(stt_model)),
             ),
+            threading.Thread(
+                target=_load,
+                args=("speaker", lambda: SpeakerAssigner() if speaker_id else None),
+            ),
         ]
         for t in threads:
             t.start()
@@ -478,7 +512,12 @@ class RealTimeTranscribe:
             t.join()
         if errors:
             raise errors[0]
-        return loaded["vad"], loaded.get("translator"), loaded["stt"]
+        return (
+            loaded["vad"],
+            loaded.get("translator"),
+            loaded["stt"],
+            loaded.get("speaker"),
+        )
 
     def _initialize_state(self):
         self.ring_buffer_maxlen = 20
@@ -504,6 +543,12 @@ class RealTimeTranscribe:
         self.committed_ts = []
         self.committed_compute = []
         self.committed_translations = []
+        self.committed_speakers = []
+        self._segment_speaker = None
+        self._window_speakers: list[str | None] = []
+        self._window_pending_ids: list[int | None] = []
+        self._pending_chunk: dict[int, int] = {}
+        self._chunk_assignments: dict[int, list[str | None]] = {}
         self.window_segments = []
         self.window_audio_duration = 0.0
         self.window_plain = None
@@ -515,7 +560,6 @@ class RealTimeTranscribe:
         self._last_window_translation_text = ""
         self.final_translation = None
         self._tty = False
-        self._header_lines: list[str] = []
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -608,12 +652,19 @@ class RealTimeTranscribe:
         print("\nTranscript:")
         print(text)
 
-    def _ingest_segment(self, processed_segment):
+    def _ingest_segment(
+        self,
+        processed_segment,
+        speaker_emb=None,
+        speaker_duration_s=None,
+        speaker_rms=None,
+    ):
         """Adaptive stability-window re-decode (growing-buffer re-decode):
         append the segment's audio, re-decode the whole window so the newest
         utterance gets predecessor context, then commit the window once its
         text stops changing (stability check) and slide it forward."""
         self.window_segments.append(processed_segment)
+        self._window_speakers.append(None)
         self.window_audio_duration += len(processed_segment) / self.sample_rate
         start_time = time.time()
         result = self.stt.transcribe(np.concatenate(self.window_segments))
@@ -628,69 +679,195 @@ class RealTimeTranscribe:
         prev = self.window_plain
         stable = prev is not None and _stable_prefix(plain, prev)
         forced = self.window_audio_duration > self.max_window_seconds
+        # Bound the window even when the text never stabilizes: SenseVoice
+        # re-decodes a growing buffer with drifting first words ("OKY" ->
+        # "OKAY" -> "ALL RIGHT"), so prefix stability can fail forever and the
+        # whole session would render as one never-committing line. A small
+        # segment cap commits ~2-segment chunks while keeping re-decode
+        # context (accuracy).
+        window_capped = len(self.window_segments) >= self.max_window_segments
 
-        if stable or forced:
+        new_speaker = (
+            self.speaker.assign_embedding(
+                speaker_emb,
+                duration_s=speaker_duration_s,
+                rms=speaker_rms,
+            )
+            if self.speaker is not None and speaker_emb is not None
+            else None
+        )
+        self._window_speakers[-1] = new_speaker
+        # Per-speaker segmentation: when the newest segment belongs to a
+        # different speaker than the current window, close the window now —
+        # a line must only ever append the RIGHT speaker's speech (the "my
+        # voice gets appended to other" report: the live window accumulated
+        # mixed speakers and its tag followed the newest segment). The slide
+        # baseline stays context-rich (windowed tail, not a standalone
+        # decode), so the per-speaker commits don't cost accuracy.
+        speaker_changed = (
+            prev is not None
+            and new_speaker is not None
+            and new_speaker != self._segment_speaker
+        )
+        # Pending id of the newest segment (None unless it was flagged "?").
+        # Committed chunks are mapped back to the pending embeddings that
+        # produced their speaker tag, so a promotion can retroactively relabel
+        # exactly the right chunks.
+        pid_now = (
+            self.speaker.pending_count() - 1
+            if new_speaker == UNCERTAIN and self.speaker is not None
+            else None
+        )
+        self._window_pending_ids.append(pid_now)
+
+        if stable or forced or window_capped or speaker_changed:
             if prev is not None:
+                # The committed chunk covers the window before the newest
+                # segment; tag it by its segments' assignments — all the same
+                # -> that speaker, mixed -> UNCERTAIN (a mixed window can't be
+                # cleanly labeled, and per-segment windows would sacrifice the
+                # re-decode context that drives transcription accuracy).
                 self._commit_chunk(
                     prev,
                     self.window_styled,
                     self.window_ts,
                     self.window_compute,
                     self.window_translation,
+                    speaker=self._window_chunk_speaker(include_newest=False),
                 )
-            if forced and prev is None:
-                self._commit_chunk(plain, styled, ts, compute)
+                idx = len(self.committed_chunks) - 1
+                for pid in self._window_pending_ids[:-1]:
+                    if pid is not None:
+                        self._pending_chunk[pid] = idx
+                self._chunk_assignments[idx] = self._window_speakers[:-1]
+            if (forced or window_capped) and prev is None:
+                self._commit_chunk(
+                    plain,
+                    styled,
+                    ts,
+                    compute,
+                    speaker=self._window_chunk_speaker(include_newest=True),
+                )
+                idx = len(self.committed_chunks) - 1
+                for pid in self._window_pending_ids:
+                    if pid is not None:
+                        self._pending_chunk[pid] = idx
+                self._chunk_assignments[idx] = self._window_speakers
                 self._reset_window()
+                self._relabel_promoted()
                 self._redraw()
                 return
-            # Slide the window to the newest segment and re-decode it alone so
-            # the partial is colored and consistent with the next comparison
-            # baseline (the corrected-tail version is kept only if the
-            # standalone decode comes back empty).
+            # Slide the window to the newest segment. Its baseline is its
+            # portion of the WINDOWED decode (the tail after the committed
+            # `prev` — context-rich and complete, unlike a standalone decode,
+            # which truncates tails e.g. "...WHICH HAS A PU" -> "cut off in a
+            # not so nice point"), and its styled twin keeps the per-word
+            # coloring. The standalone decode is only a fallback (unstable
+            # window where the prefix strip is unsafe, or an empty tail). An
+            # empty baseline is kept, never reset away — the segment's text
+            # must not vanish ("some of my speech don't append").
             self.window_translation = None
             self.window_segments = [processed_segment]
+            self._window_speakers = [new_speaker]
+            self._window_pending_ids = [pid_now]
             self.window_audio_duration = len(processed_segment) / self.sample_rate
-            start_time = time.time()
-            result2 = self.stt.transcribe(processed_segment)
-            compute2 = time.time() - start_time
-            plain2 = (
-                self.stt.extract_text(result2)
-                if (isinstance(result2, list) and result2)
-                else ""
-            )
-            if plain2:
-                self.window_plain = plain2
-                self.window_styled = self._format_transcript(result2)
-                self.window_ts = ts
-                self.window_compute = compute2
-                self._enqueue_window_translation(plain2)
+            if prev is not None and _stable_prefix(plain, prev):
+                baseline = _strip_prefix(plain, prev)
+                baseline_styled = _strip_styled_prefix(styled, len(_norm(prev)))
             else:
-                tail = _strip_prefix(plain, prev) if prev is not None else plain
-                if not tail.strip():
-                    self._reset_window()
-                    self._redraw()
-                    return
-                self.window_plain = tail
-                self.window_styled = tail
-                self.window_ts = ts
+                baseline = ""
+                baseline_styled = ""
+            if baseline.strip():
                 self.window_compute = compute
-                self._enqueue_window_translation(tail)
+            else:
+                start_time = time.time()
+                result2 = self.stt.transcribe(processed_segment)
+                self.window_compute = time.time() - start_time
+                baseline = (
+                    self.stt.extract_text(result2)
+                    if (isinstance(result2, list) and result2)
+                    else ""
+                )
+                baseline_styled = (
+                    self._format_transcript(result2)
+                    if (isinstance(result2, list) and result2)
+                    else ""
+                )
+            self.window_plain = baseline
+            self.window_styled = baseline_styled
+            self.window_ts = ts
+            self._enqueue_window_translation(baseline)
         else:
             self.window_plain = plain
             self.window_styled = styled
             self.window_ts = ts
             self.window_compute = compute
             self._enqueue_window_translation(plain)
+        self._relabel_promoted()
+        self._segment_speaker = new_speaker
         self._redraw()
+
+    def _relabel_promoted(self):
+        """A pending-cluster promotion retroactively labels the earlier "?"
+        chunks whose segments joined the promoted cluster — the ambiguous
+        voice turned out to be a real, distinct speaker, so the display
+        shouldn't keep it as "?". Runs after the commit so a chunk committed
+        in this very call is covered too.
+
+        A chunk is relabeled ONLY when it belongs entirely to the promoted
+        cluster — every covered segment's assignment is either UNCERTAIN or
+        the promoted name, and every pending segment of the chunk is in the
+        promoted set. A chunk that also contains another speaker's segments
+        (e.g. the primary voice sharing a window with the device audio) stays
+        "[?]" — relabeling it would show one speaker's words under another's
+        label ("my voice merged with others")."""
+        promoted = (
+            self.speaker.consume_promotion() if self.speaker is not None else None
+        )
+        if not promoted:
+            return
+        name, pids = promoted
+        promoted_ids = set(pids)
+        with self.display_lock:
+            for idx in self._chunk_assignments:
+                assigns = self._chunk_assignments[idx]
+                if any(a not in (None, UNCERTAIN, name) for a in assigns):
+                    continue
+                chunk_pids = [
+                    pid for pid, cidx in self._pending_chunk.items() if cidx == idx
+                ]
+                if any(pid not in promoted_ids for pid in chunk_pids):
+                    continue
+                if (
+                    idx < len(self.committed_speakers)
+                    and self.committed_speakers[idx] == UNCERTAIN
+                ):
+                    self.committed_speakers[idx] = name
+        self._pending_chunk = {}
+        self._chunk_assignments = {}
 
     def _reset_window(self):
         self.window_segments = []
+        self._window_speakers = []
+        self._window_pending_ids = []
         self.window_audio_duration = 0.0
         self.window_plain = None
         self.window_styled = ""
         self.window_ts = None
         self.window_compute = None
         self.window_translation = None
+
+    def _window_chunk_speaker(self, include_newest: bool) -> str | None:
+        """Tag for the chunk being committed: the assignments of the segments
+        it covers. All the same -> that name; mixed -> UNCERTAIN (the window
+        spans speakers, so no single label is honest); none -> None."""
+        assigns = (
+            self._window_speakers if include_newest else self._window_speakers[:-1]
+        )
+        distinct = {a for a in assigns if a is not None}
+        if len(distinct) == 1:
+            return distinct.pop()
+        return UNCERTAIN if distinct else None
 
     def _enqueue_window_translation(self, text):
         """Live translation of the current window, deduplicated on unchanged
@@ -706,7 +883,7 @@ class RealTimeTranscribe:
         self._window_seq += 1
         self.q_for_translation.put(("window", seq, text))
 
-    def _commit_chunk(self, plain, styled, ts, compute, translation=None):
+    def _commit_chunk(self, plain, styled, ts, compute, translation=None, speaker=None):
         # Append the parallel lists atomically under the display lock: a
         # translation-thread redraw that reads them mid-append would hit an
         # IndexError and silently kill the worker (translations stopped after
@@ -717,14 +894,18 @@ class RealTimeTranscribe:
             self.committed_ts.append(ts)
             self.committed_compute.append(compute)
             self.committed_translations.append(translation)
+            self.committed_speakers.append(speaker)
         if self.translator and plain.strip() and translation is None:
             self.q_for_translation.put(
                 ("commit", len(self.committed_chunks) - 1, plain)
             )
 
-    def _fmt_meta_line(self, ts, styled, compute):
+    def _fmt_meta_line(self, ts, styled, compute, speaker=None):
+        prefix = f"[{speaker}] " if speaker else ""
+        if speaker == UNCERTAIN and self._tty:
+            prefix = "\033[2m[?]\033[0m "
         suffix = f" ({compute:.4f}s)" if compute is not None else ""
-        return f"[{ts}] {styled}{suffix}"
+        return f"{prefix}[{ts}] {styled}{suffix}"
 
     def _render_lines(self):
         if self.clean:
@@ -740,6 +921,9 @@ class RealTimeTranscribe:
                     self.committed_ts[i],
                     self.committed_styled[i],
                     self.committed_compute[i],
+                    self.committed_speakers[i]
+                    if i < len(self.committed_speakers)
+                    else None,
                 )
             )
             tr = self.committed_translations[i]
@@ -748,7 +932,10 @@ class RealTimeTranscribe:
         if self.window_plain:
             lines.append(
                 self._fmt_meta_line(
-                    self.window_ts, self.window_styled, self.window_compute
+                    self.window_ts,
+                    self.window_styled,
+                    self.window_compute,
+                    self._window_chunk_speaker(include_newest=True),
                 )
             )
             if self.window_translation:
@@ -764,7 +951,7 @@ class RealTimeTranscribe:
         with self.display_lock:
             if self._tty:
                 sys.stdout.write("\x1b[2J\x1b[H")
-            for line in [*self._header_lines, *self._render_lines()]:
+            for line in [*self._header_lines(), *self._render_lines()]:
                 sys.stdout.write(line + "\n")
             sys.stdout.flush()
 
@@ -774,6 +961,56 @@ class RealTimeTranscribe:
             parts.append(self.window_plain)
         self.transcript = [_join_text_parts(parts)]
 
+    @staticmethod
+    def _strip_timing(text: str) -> str:
+        """Drop the "(0.1234s)" timing suffix the translation worker appends."""
+        if text.endswith("s)") and " (" in text:
+            return text.rsplit(" (", 1)[0]
+        return text
+
+    def _save_transcript(self):
+        """Write the session transcript as plain text next to the audio file.
+        Dictate (clean): the single clean text, as printed at the end. Listen:
+        one line per chunk with timestamp + speaker tag, translations indented
+        under their chunk — no ANSI colors, no compute times."""
+        if self.audio_file_path is None:
+            return
+        lines: list[str] = []
+        if self.clean:
+            parts = [c + _chunk_punct(c) for c in self.committed_chunks if c]
+            if self.window_plain:
+                parts.append(self.window_plain + _chunk_punct(self.window_plain))
+            text = _join_text_parts(parts, force_space=True)
+            if text:
+                lines.append(text)
+        else:
+            for i, chunk in enumerate(self.committed_chunks):
+                speaker = (
+                    self.committed_speakers[i]
+                    if i < len(self.committed_speakers)
+                    else None
+                )
+                line = f"[{self.committed_ts[i]}]"
+                if speaker:
+                    line += f" [{speaker}]"
+                lines.append(f"{line} {chunk}")
+                tr = self.committed_translations[i]
+                if tr:
+                    lines.append(f"    → {self._strip_timing(tr)}")
+            if self.window_plain:
+                speaker = self._window_chunk_speaker(include_newest=True)
+                line = f"[{self.window_ts}]"
+                if speaker:
+                    line += f" [{speaker}]"
+                lines.append(f"{line} {self.window_plain}")
+                if self.final_translation:
+                    lines.append(f"    → {self._strip_timing(self.final_translation)}")
+        if not lines:
+            return
+        txt_path = self.audio_file_path.with_suffix(".txt")
+        txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"Transcript saved to {txt_path}")
+
     def _transcription_worker(self):
         while self.running:
             try:
@@ -782,10 +1019,23 @@ class RealTimeTranscribe:
                 continue
             if segment is None:
                 break
+            # Speaker ID embeds the RAW segment: noisereduce + peak-normalization
+            # compress the embedding space and merge distinct voices (probe
+            # calibration also used raw clips). STT still gets the processed audio.
+            speaker_emb = (
+                self.speaker.embed(segment, self.sample_rate)
+                if self.speaker is not None
+                else None
+            )
             processed_segment = process_audio_segment(segment, self.sample_rate)
             if processed_segment is None:
                 continue
-            self._ingest_segment(processed_segment)
+            self._ingest_segment(
+                processed_segment,
+                speaker_emb,
+                speaker_duration_s=len(segment) / self.sample_rate,
+                speaker_rms=float(np.sqrt(np.mean(segment**2))),
+            )
 
     def _translation_worker(self):
         if self.translator is None:
@@ -847,19 +1097,31 @@ class RealTimeTranscribe:
         self._finalize()
         if self.audio_file_path and self.full_recording_list:
             full_audio = np.concatenate(self.full_recording_list)
+            if self.audio_file_path.suffix.lower() == ".flac":
+                full_audio = np.clip(full_audio, -1.0, 1.0)
+                full_audio = (full_audio * 32767).astype(np.int16)
             sf.write(self.audio_file_path, full_audio, self.sample_rate)
             print(f"Audio saved to {self.audio_file_path}")
+            self._save_transcript()
 
-    def run(self):
-        self._tty = sys.stdout.isatty()
-        self._header_lines = [
+    def _header_lines(self) -> list[str]:
+        """Static header text, rebuilt per redraw so the auto-assigned speaker
+        names stay live ("waiting for first voice" -> self, other, ...)."""
+        lines = [
             "Real-time transcribe... (Ctrl+C to stop)",
             f"Speech-to-text model: {self.stt_model_name}",
         ]
+        if self.speaker is not None:
+            names = ", ".join(self.speaker.speaker_names) or "waiting for first voice"
+            lines.append(f"Speaker ID: WeSpeaker en (auto-assign: {names})")
         if self.translator:
-            self._header_lines.append(
+            lines.append(
                 f"Translation model: {self.translator.model} → {self.translator.target_lang}"
             )
+        return lines
+
+    def run(self):
+        self._tty = sys.stdout.isatty()
         if self._tty:
             sys.stdout.write("\x1b[?1049h")
         self._redraw()
@@ -914,7 +1176,7 @@ class RealTimeTranscribe:
         metrics = {"CER": cer_error}
         # WER only makes sense on whitespace-segmented text (English). On
         # unsegmented Chinese/mixed it compares chars vs segments and explodes
-        # (_archive/benchmark-2026-08-24.md scores zh with CER for this reason), so skip it.
+        # (_archive/benchmark_transcribe.md scores zh with CER for this reason), so skip it.
         if not (
             _contains_cjk(self.reference_transcript)
             or _contains_cjk(self.realtime_transcript)
@@ -926,6 +1188,6 @@ class RealTimeTranscribe:
             metrics["WER"] = wer_error
         else:
             print("Word Error Rate (WER): N/A (Chinese/mixed — use CER)")
-        print(f"Reference Transcript: {self.reference_transcript}")
-        print(f"Realtime Transcript: {self.realtime_transcript}")
+        print(f"Reference Transcript: \n {self.reference_transcript}")
+        print(f"Realtime Transcript: \n {self.realtime_transcript}")
         return metrics

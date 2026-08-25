@@ -4,13 +4,16 @@ Modes (feature scope, PLAN.md 2026-08-24 — models are internal picks, no
 model names to configure):
 
 - `listen`   — transcribe English, translate en->cn. Translation ON by default
-               (`--no-translate` to turn off).
+               (`--no-translate` to turn off). Auto speaker ID ON: each segment
+               is auto-assigned to a speaker (`self`, `other`, ...) as voices
+               appear.
 - `dictate`  — dictation in en/cn/mixed. `--language en-only|mixed` (default
                mixed), translation OFF by default (`--translate` to turn on).
 - `benchmark`— the model benchmark harness (interpreter.benchmark).
 
-Both live modes record the session to a WAV in data/ and evaluate WER/CER
-afterwards (offline re-transcribe of the saved file).
+Both live modes record the session to a FLAC in data/listen/ (listen) or
+data/dictate/ (dictate), write the transcript as a sibling .txt, and evaluate
+WER/CER afterwards (offline re-transcribe of the saved file).
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ import argparse
 import datetime
 import sys
 from collections.abc import Sequence
-from pathlib import Path
 
 from interpreter import DATA_DIR
 from interpreter.transcribe import (
@@ -29,20 +31,21 @@ from interpreter.transcribe import (
 )
 from interpreter.translate import TRANSLATE_MODEL
 
-MAX_SEGMENT_DURATION = 10.0
+MAX_SEGMENT_DURATION = 5.0
 
 
 def _run_live(
     *,
     stt_model: str,
     translate: bool,
-    audio_file: Path | None,
     mode: str,
     clean: bool = False,
+    speaker_id: bool = False,
 ) -> None:
-    if audio_file is None:
-        timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
-        audio_file = DATA_DIR / f"{mode}_{timestamp}.wav"
+    mode_dir = DATA_DIR / mode
+    mode_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+    audio_file = mode_dir / f"{mode}_{timestamp}.flac"
     print(
         "Loading models (first run downloads weights from Hugging Face)...",
         flush=True,
@@ -54,6 +57,7 @@ def _run_live(
         translate_to="Chinese" if translate else None,
         max_segment_duration=MAX_SEGMENT_DURATION,
         clean=clean,
+        speaker_id=speaker_id,
     )
     rtt.run()
     rtt.evaluate()
@@ -72,12 +76,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p_listen.add_argument(
         "--no-translate", action="store_true", help="disable translation"
     )
-    p_listen.add_argument(
-        "--audio-file",
-        type=Path,
-        default=None,
-        help="session WAV path (default: data/)",
-    )
 
     p_dictate = sub.add_parser(
         "dictate", help="dictate in en/cn/mixed (translation off by default)"
@@ -90,12 +88,6 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("en-only", "mixed"),
         default="mixed",
         help="language scope (default: mixed)",
-    )
-    p_dictate.add_argument(
-        "--audio-file",
-        type=Path,
-        default=None,
-        help="session WAV path (default: data/)",
     )
 
     sub.add_parser(
@@ -119,15 +111,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         _run_live(
             stt_model=STT_MODEL_EN_ONLY,
             translate=not args.no_translate,
-            audio_file=args.audio_file,
             mode="listen",
+            speaker_id=True,
         )
     elif args.command == "dictate":
         stt_model = STT_MODEL_EN_ONLY if args.language == "en-only" else STT_MODEL_MIXED
         _run_live(
             stt_model=stt_model,
             translate=args.translate,
-            audio_file=args.audio_file,
             mode="dictate",
             clean=True,
         )

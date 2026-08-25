@@ -14,6 +14,7 @@ Usage:
   uv run python -m interpreter benchmark --samples sample_a1
   uv run python -m interpreter benchmark --task translate        # all en->zh models
   uv run python -m interpreter benchmark --task translate opus-mt-en-zh
+  uv run python -m interpreter benchmark --task speaker          # speaker-ID probe (Phase 3)
   uv run python -m interpreter benchmark --record mode_b_1.wav 30  # host only (mic)
 
 Default runs load one model per subprocess (load -> benchmark -> write JSON
@@ -63,6 +64,11 @@ TRANSCRIBE_RESULTS_DIR = TRANSCRIBE_DIR / "results"
 TRANSLATE_RESULTS_DIR = TRANSLATE_DIR / "results"
 TRANSCRIBE_MANIFEST = TRANSCRIBE_DIR / "manifest.json"
 TRANSLATE_MANIFEST = TRANSLATE_DIR / "manifest.json"
+SPEAKER_DIR = BENCH_DIR / "speaker"
+SPEAKER_MODELS_DIR = SPEAKER_DIR / "models"
+SPEAKER_SAMPLES_DIR = SPEAKER_DIR / "samples"
+SPEAKER_RESULTS_DIR = SPEAKER_DIR / "results"
+SPEAKER_MANIFEST = SPEAKER_DIR / "manifest.json"
 
 
 # ---------------------------------------------------------------------------
@@ -766,12 +772,229 @@ def _print_translate_merged(rows: list[dict]) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Speaker-ID probe (Phase 3, 2026-08-24)
+#
+# Enrollment-based identification via sherpa-onnx SpeakerEmbeddingExtractor +
+# SpeakerEmbeddingManager. En-only (listen mode — zh speaker ID dropped
+# 2026-08-24). Data: a LibriSpeech dev-clean subset (single speaker per file,
+# CC-BY-4.0) — the probe's task is to validate the model runs in the container
+# and measure identification accuracy + the accept threshold, not a
+# Phase-1-style model sweep. Caveat: LibriSpeech is clean studio audio; meeting
+# conditions differ (noise, cross-channel) — treat numbers as upper bounds.
+# ---------------------------------------------------------------------------
+
+
+SPEAKER_MODEL_SPECS: list[dict] = [
+    {
+        "name": "wespeaker_en_voxceleb_resnet34",
+        "file": "wespeaker_en_voxceleb_resnet34.onnx",
+        "lang": "en",
+        "note": "en (VoxCeleb) — plan pick",
+    },
+    {
+        "name": "wespeaker_en_voxceleb_CAM++",
+        "file": "wespeaker_en_voxceleb_CAM++.onnx",
+        "lang": "en",
+        "note": "en (VoxCeleb) — cheap comparator",
+    },
+]
+
+_SPEAKER_MODEL_BASE = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    "speaker-recongition-models/"
+)
+
+ENROLL_CLIPS = 3
+TEST_CLIPS = 10
+
+
+def speaker_models() -> list[str]:
+    return [s["name"] for s in SPEAKER_MODEL_SPECS]
+
+
+def _ensure_speaker_model(spec: dict) -> Path:
+    dest = SPEAKER_MODELS_DIR / spec["file"]
+    if dest.exists():
+        return dest
+    import urllib.request
+
+    SPEAKER_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"  downloading {spec['file']} ...")
+    urllib.request.urlretrieve(_SPEAKER_MODEL_BASE + spec["file"], dest)
+    return dest
+
+
+def build_speaker_manifest() -> dict:
+    """Scan samples/<speaker>/**/*.flac; deterministic enroll/test split."""
+    speakers: dict[str, dict] = {}
+    for spk in sorted(p.name for p in SPEAKER_SAMPLES_DIR.iterdir() if p.is_dir()):
+        clips = sorted(SPEAKER_SAMPLES_DIR.glob(f"{spk}/**/*.flac"))
+        if len(clips) < ENROLL_CLIPS + 1:
+            continue
+        rel = lambda p: str(p.relative_to(SPEAKER_SAMPLES_DIR))
+        speakers[spk] = {
+            "enroll": [rel(c) for c in clips[:ENROLL_CLIPS]],
+            "test": [rel(c) for c in clips[ENROLL_CLIPS : ENROLL_CLIPS + TEST_CLIPS]],
+        }
+    manifest = {"speakers": speakers}
+    SPEAKER_MANIFEST.write_text(json.dumps(manifest, indent=2))
+    return manifest
+
+
+def load_speaker_manifest() -> dict:
+    return json.loads(SPEAKER_MANIFEST.read_text(encoding="utf-8"))
+
+
+def _embed_clip(extractor, path: Path):
+    import numpy as np
+
+    samples, sr = sf.read(str(path), dtype="float32", always_2d=False)
+    if sr != 16000:
+        raise ValueError(f"{path}: {sr} Hz — Wespeaker expects 16 kHz")
+    stream = extractor.create_stream()
+    stream.accept_waveform(sample_rate=sr, waveform=samples)
+    stream.input_finished()
+    if not extractor.is_ready(stream):
+        raise ValueError(f"extractor not ready: {path}")
+    return np.asarray(extractor.compute(stream), dtype=np.float32)
+
+
+def _speaker_metrics(genuine: list[float], impostor: list[float]) -> dict:
+    """EER via threshold sweep (accept if similarity >= threshold)."""
+    import numpy as np
+
+    g = np.asarray(genuine, dtype=np.float64)
+    i = np.asarray(impostor, dtype=np.float64)
+    best: tuple[float, float, float, float] | None = None
+    for thr in np.linspace(0.0, 1.0, 201):
+        frr = float((g < thr).mean())  # false reject (genuine below threshold)
+        far = float((i >= thr).mean())  # false accept (impostor above threshold)
+        diff = abs(frr - far)
+        if best is None or diff < best[0]:
+            best = (diff, thr, frr, far)
+    assert best is not None
+    _, thr, frr, far = best
+    return {
+        "eer": (frr + far) / 2,
+        "eer_threshold": float(thr),
+        "frr_at_eer": frr,
+        "far_at_eer": far,
+    }
+
+
+def run_speaker_model(name: str, manifest: dict) -> dict:
+    import numpy as np
+
+    spec = next(s for s in SPEAKER_MODEL_SPECS if s["name"] == name)
+    model_path = _ensure_speaker_model(spec)
+    print(f"\n=== {name} ({spec['lang']}) — {spec['note']} ===")
+    _ensure_onnxruntime_lib()
+
+    import sherpa_onnx
+
+    t0 = time.perf_counter()
+    extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+        sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(model_path))
+    )
+    load_s = time.perf_counter() - t0
+    print(f"  load: {load_s:.1f}s  dim={extractor.dim}")
+
+    names = sorted(manifest["speakers"])
+    manager = sherpa_onnx.SpeakerEmbeddingManager(extractor.dim)
+    for spk in names:
+        embs = [
+            _embed_clip(extractor, SPEAKER_SAMPLES_DIR / c)
+            for c in manifest["speakers"][spk]["enroll"]
+        ]
+        avg = np.mean(np.stack(embs), axis=0)
+        if not manager.add(spk, avg):
+            return {"model": name, "error": f"enroll failed for {spk}"}
+
+    genuine: list[float] = []
+    impostor: list[float] = []
+    walls: list[float] = []
+    hits = total = 0
+    per_speaker: dict[str, dict] = {}
+    for spk in names:
+        spk_hits = spk_total = 0
+        for clip in manifest["speakers"][spk]["test"]:
+            t0 = time.perf_counter()
+            emb = _embed_clip(extractor, SPEAKER_SAMPLES_DIR / clip)
+            walls.append(time.perf_counter() - t0)
+            scores = {n: manager.score(n, emb) for n in names}
+            best = max(scores, key=lambda n: scores[n])
+            hits += best == spk
+            total += 1
+            spk_hits += best == spk
+            spk_total += 1
+            for n, s in scores.items():
+                (genuine if n == spk else impostor).append(s)
+        per_speaker[spk] = {"acc": spk_hits / spk_total}
+        print(f"  {spk}: {spk_hits}/{spk_total}")
+
+    m = _speaker_metrics(genuine, impostor)
+    top1 = hits / total
+    print(
+        f"  top-1 acc {top1:.1%}  EER {m['eer']:.1%} @ thr {m['eer_threshold']:.2f}  "
+        f"{1000.0 * sum(walls) / len(walls):.0f} ms/clip"
+    )
+    return {
+        "model": name,
+        "lang": spec["lang"],
+        "dataset": "librispeech dev-clean subset (14 speakers, single-speaker files)",
+        "enroll_clips": ENROLL_CLIPS,
+        "test_clips_per_speaker": TEST_CLIPS,
+        "speakers": len(names),
+        "test_clips": total,
+        "top1_acc": top1,
+        "ms_per_clip": 1000.0 * sum(walls) / len(walls) if walls else None,
+        "load_s": load_s,
+        "peak_rss_mb": peak_rss_mb(),
+        **m,
+        "per_speaker": per_speaker,
+        "env": env_info(),
+    }
+
+
+def _speaker_merged_table() -> list[dict]:
+    rows: list[dict] = []
+    for p in sorted(SPEAKER_RESULTS_DIR.glob("*.json")):
+        if p.name == "merged.json":
+            continue
+        r = json.loads(p.read_text())
+        rows.append(
+            {
+                "model": r["model"],
+                "top1": r.get("top1_acc"),
+                "eer": r.get("eer"),
+                "ms": r.get("ms_per_clip"),
+                "rss_mb": r.get("peak_rss_mb"),
+            }
+        )
+    return rows
+
+
+def _print_speaker_merged(rows: list[dict]) -> None:
+    print("\n=== Merged speaker-ID probe ===")
+    print(f"{'model':34s} {'top-1 acc':>9s} {'EER':>7s} {'ms/clip':>8s} {'RSS MB':>7s}")
+    for r in rows:
+        if r["top1"] is None:
+            print(f"{r['model']:34s} {'no results':55s}")
+            continue
+        fmt = lambda v: f"{v:.3f}" if v is not None else "—"
+        print(
+            f"{r['model']:34s} {fmt(r['top1']):>9s} {fmt(r['eer']):>7s} "
+            f"{fmt(r['ms']):>8s} {fmt(r['rss_mb']):>7s}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("models", nargs="*", help="model names (default: all)")
     parser.add_argument(
         "--task",
-        choices=("stt", "translate"),
+        choices=("stt", "translate", "speaker"),
         default="stt",
         help="benchmark task (default: stt)",
     )
@@ -820,6 +1043,19 @@ def main() -> None:
                 "en->zh (wmt19 validation)",
             )
             return
+        if args.task == "speaker":
+            print("Models:", ", ".join(speaker_models()))
+            manifest = build_speaker_manifest()
+            n_clips = sum(len(d["test"]) for d in manifest["speakers"].values())
+            print(
+                "Speakers:",
+                len(manifest["speakers"]),
+                "| test clips:",
+                n_clips,
+                "| enroll clips/speaker:",
+                ENROLL_CLIPS,
+            )
+            return
         print("Models:", ", ".join(available_models()))
         print("Samples:")
         for s in samples:
@@ -850,6 +1086,23 @@ def main() -> None:
         )
         if not args.no_merged:
             _print_translate_merged(merged)
+        return
+
+    if args.task == "speaker":
+        manifest = build_speaker_manifest()
+        names = args.models or speaker_models()
+        SPEAKER_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            result = run_speaker_model(name, manifest)
+            out = SPEAKER_RESULTS_DIR / f"{name}.json"
+            out.write_text(json.dumps(result, indent=2, ensure_ascii=False))
+            print(f"  -> {out}")
+        merged = _speaker_merged_table()
+        (SPEAKER_RESULTS_DIR / "merged.json").write_text(
+            json.dumps(merged, indent=2, ensure_ascii=False)
+        )
+        if not args.no_merged:
+            _print_speaker_merged(merged)
         return
 
     names = args.models or available_models()

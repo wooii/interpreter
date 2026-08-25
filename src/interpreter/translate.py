@@ -1,9 +1,9 @@
 """en->zh translation — opus-mt-en-zh (Helsinki-NLP seq2seq), the only backend.
 
 Dedicated NMT: deterministic, best BLEU on the benchmark corpus (33.59,
-_archive/benchmark-2026-08-24.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
+_archive/benchmark_translate.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
 quality mode was dropped 2026-08-24 — live dictation showed hallucinated
-content and a meaning-reversed error (PLAN.md, _archive/benchmark-2026-08-24.md).
+content and a meaning-reversed error (PLAN.md, _archive/benchmark_translate.md).
 """
 
 from __future__ import annotations
