@@ -1,13 +1,19 @@
-# Model Benchmark
+# Transcribe Benchmark (STT)
+
+Record date: **2026-08-24** — 60 STT samples per model (20 en-only, 20 zh-only,
+20 zh↔en mixed), 15-model registry, run in the Linux container (8 cores / 8 GB);
+decisions from container numbers only. The 2026-08-23 30-sample pass is retained
+as reference below. The translation record lives in `benchmark_translate.md`;
+speaker ID in `benchmark_speaker.md`.
 
 Status: **container pass re-run done (2026-08-24)** — 60 STT samples per model (20 en-only, 20 zh-only, 20 zh↔en mixed), 15-model registry; decisions from container numbers only. The 2026-08-23 30-sample pass is retained as reference below.
 
-## Two model types
+## Task
 
-The harness (`src/interpreter/benchmark.py`) benchmarks two kinds of models, selected by `--task`:
+The harness (`src/interpreter/benchmark.py`) selects tasks with `--task`:
 
 - **Transcribe (STT)** — `--task stt` (default): audio → text. Whisper-family, sherpa-onnx ASR, Moonshine. Scored with WER/CER/RTF/RSS. **Historical baseline: `whispercpp-large-v3-turbo-q5_0`** (whisper.cpp via pywhispercpp — dropped from the product 2026-08-24; see the Phase 1 conclusion).
-- **Translate (en → zh)** — `--task translate`: text → text. Dedicated NMT (opus-mt, M2M100); the former LLM baseline (`ollama-qwen3.5-0.8b`) was dropped with the product quality mode (2026-08-24 — see the Phase 1 conclusion). Scored with BLEU(zh), ms/sentence, RSS. **Product default: `opus-mt-en-zh`.**
+- **Translate (en → zh)** — `--task translate`: text → text; record in `benchmark_translate.md`. Scored with BLEU(zh), ms/sentence, RSS. **Product default: `opus-mt-en-zh`.**
 
 Directory layout:
 
@@ -318,66 +324,3 @@ real-time on the M4. Sherpa models did not run there (macOS wheel fails to load
 | whisper.cpp `large-v3-turbo-q5_0` (**baseline**) | 0.023 | 0.075 |
 | whisper.cpp `medium.en` | 0.197 | 0.095 |
 | Moonshine v2 streaming-medium | 0.238 | 0.064 |
-
-## Translate task (en → zh): text → text
-
-### Corpus & metrics
-
-- **100 sentences** from the wmt19 zh-en validation split (`newsdev2019`) in
-  `data/benchmark/translate/manifest.json`.
-- **BLEU(zh)** via sacrebleu with `tokenize="zh"`.
-- **ms/sentence** — decode wall time averaged over the corpus (LLM RTT dominated by
-  ollama server round-trips, not model compute).
-- **Peak RSS MB** per model process (the 8 GB budget check; see "Metrics explained"
-  — for ollama models this measures the python client; the ollama *server* RSS is
-  recorded separately).
-
-### How to run
-
-```bash
-uv run python -m interpreter.benchmark --task translate --list
-uv run python -m interpreter.benchmark --task translate              # all translate models
-uv run python -m interpreter.benchmark --task translate opus-mt-en-zh
-```
-
-Same container rule as the STT task: prefix with
-`UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync` in the container (AGENTS.md).
-
-Per-model JSONs land in `data/benchmark/translate/results/<model>.json`; the parent
-prints the merged table and writes `data/benchmark/translate/results/merged.json`.
-
-### Merged results (2026-08-24 pass)
-
-| model | BLEU(zh) | ms/sent | RSS MB |
-|---|---|---|---|
-| **opus-mt-en-zh** (Helsinki-NLP) | **33.59** | 1152 | 1172 |
-| m2m100-418m (facebook) | 31.03 | 5233 | 4658 |
-| **ollama-qwen3.5-0.8b** (translate baseline) | 24.16 | 831 | 72* |
-
-*RSS column = the python benchmark client; the ollama *server* is a separate daemon
-(≈20–40 MB idle with the model unloaded after the run). Note: the 2026-08-23 pass
-measured opus-mt at 732 ms/sentence on the 4-core container — today's 1152 ms is the
-8-core pass; the ranking (opus-mt > m2m100 on quality+speed) is unchanged. The 8-core
-m2m100 run is 3× faster than the 4-core one (5233 vs 15963 ms/sentence).
-
-Notes: only the transformers NMT pair ran on 2026-08-23 — the ollama baseline needs an
-ollama server, which the container lacked; ollama was installed in the container on
-2026-08-24. MADLAD-400 was dropped from the fast-NMT tier: gated on HF and CC-BY-NC
-licensed. **Qwen3-MT-0.6B excluded** (2026-08-24): gated on HF — model download
-requires authentication, and there is no ModelScope mirror; the product policy
-excludes auth-gated model downloads entirely (PLAN.md). Verdict: **opus-mt-en-zh is the
-product's only translation backend** (best BLEU at ~1.2 s/sentence, 1172 MB); qwen3.5-0.8b —
-the former quality-mode LLM baseline — scores 9.4 BLEU below opus-mt at similar
-per-sentence cost and was **dropped 2026-08-24** (live dictation A/B: hallucinated
-content + meaning reversal; see PLAN.md). The ollama adapter and `ollama` dependency
-were removed from the product and the benchmark harness. Early research (2026-08-22)
-motivated the fast-NMT default: dedicated NMT ≈ 50–300 ms/sentence vs ~1–5 s for Ollama
-small LLMs; NLLB-200 3.3B quality ≈ 4 BLEU below Qwen3-32B local (NLLB excluded anyway:
-CC-BY-NC).
-
-### Merged results — initial pass (2026-08-23, reference)
-
-| model | BLEU(zh) | ms/sent | RSS MB |
-|---|---|---|---|
-| **opus-mt-en-zh** (Helsinki-NLP) | **33.59** | 732 | 991 |
-| m2m100-418m (facebook) | 31.03 | 15963 | 3016 |
