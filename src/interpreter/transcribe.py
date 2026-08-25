@@ -12,7 +12,7 @@ Model selection (the CLI picks models internally per task — see __main__.py;
 the library still accepts explicit names):
 
     RealTimeTranscribe(stt_model="sensevoice")             # default; zh<->en code-switching
-    RealTimeTranscribe(stt_model="parakeet-tdt-0.6b-v2")   # best en-only accuracy
+    RealTimeTranscribe(stt_model="parakeet-unified-en-0.6b")  # en-only / listen (offline mode)
 
     RealTimeTranscribe(translate_model="opus-mt-en-zh")    # default; dedicated NMT, en->zh
     RealTimeTranscribe(translate_to=None)                  # no translation
@@ -23,6 +23,14 @@ Record a session for later evaluation:
     rtt.run()                       # writes session.wav on stop
     rtt.evaluate()                  # WER/CER of the live transcript vs offline re-transcribe
 
+Replay a file through the live pipeline (no mic — same VAD/segment/window
+engine, used by the benchmark sweep; 16 kHz mono):
+
+    rtt = RealTimeTranscribe(input_path="clip.wav", audio_file_path="out.wav",
+                             max_segment_duration=4.0, translate_to=None)
+    rtt.run()
+    rtt.evaluate()
+
 Any path is accepted (format inferred from the suffix); .flac is written as
 int16 PCM. The transcript is saved as a plain-text .txt next to the audio file.
 
@@ -31,7 +39,7 @@ Standalone use (no mic): transcribe a 16 kHz mono file or array directly
     from interpreter.transcribe import SpeechToText
     from interpreter.translate import Translator
 
-    stt = SpeechToText("sensevoice")            # or "parakeet-tdt-0.6b-v2"
+    stt = SpeechToText("sensevoice")            # or "parakeet-unified-en-0.6b"
     text = stt.extract_text(stt.transcribe_file("clip.wav"))
     print(Translator().translate(text))         # opus-mt-en-zh -> Chinese
 
@@ -64,7 +72,7 @@ from interpreter import DATA_DIR
 from interpreter.speaker import UNCERTAIN, SpeakerAssigner
 from interpreter.translate import Translator
 
-STT_MODEL_EN_ONLY = "parakeet-tdt-0.6b-v2"
+STT_MODEL_EN_ONLY = "parakeet-unified-en-0.6b"
 STT_MODEL_MIXED = "sensevoice"
 
 
@@ -199,8 +207,8 @@ def _normalize_sensevoice_case(text: str) -> str:
 MODELS_DIR = DATA_DIR / "benchmark" / "transcribe" / "models"
 
 MODEL_SPECS: dict[str, dict] = {
-    "parakeet-tdt-0.6b-v2": {
-        "repo": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+    "parakeet-unified-en-0.6b": {
+        "repo": "csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
         "files": {
             "encoder": "encoder.int8.onnx",
             "decoder": "decoder.int8.onnx",
@@ -358,8 +366,10 @@ def _word_probs_from_result(result: Any) -> list[tuple[str, float]] | None:
 class SherpaStt:
     """Offline sherpa-onnx recognizer over raw 16 kHz mono float32 audio.
 
-    Model choice (_archive/benchmark_transcribe.md, 2026-08-24): en-only ->
-    parakeet-tdt-0.6b-v2, mixed -> sensevoice; both sherpa-onnx int8
+    Model choice (PLAN.md 2026-08-25): en-only -> parakeet-unified-en-0.6b
+    (offline mode of the unified model — beats parakeet-tdt-0.6b-v2 at every
+    segment cap on the Phase 3 probe; true streaming is not real-time on the
+    container), mixed -> sensevoice; both sherpa-onnx int8
     (whisper.cpp/Moonshine dropped). Weights download anonymously from HF.
     """
 
@@ -411,8 +421,9 @@ class SpeechToText:
     dropped — see _archive/benchmark_transcribe.md for the reasons).
 
     model_name:
-      - "sensevoice"            product default (sherpa int8; dictate/multilingual winner)
-      - "parakeet-tdt-0.6b-v2"  en-only / listen option (sherpa int8 transducer)
+      - "sensevoice"                  product default (sherpa int8; dictate/multilingual winner)
+      - "parakeet-unified-en-0.6b"    en-only / listen default (sherpa int8 transducer; offline mode —
+                                      streaming not real-time on the container, PLAN.md 2026-08-25)
 
     Per-word confidence coloring: the sherpa transducer (parakeet) exposes
     per-token log-probs, grouped into word probs in _word_probs_from_result.
@@ -445,13 +456,15 @@ class RealTimeTranscribe:
         stt_model=STT_MODEL_MIXED,
         translate_model="opus-mt-en-zh",
         translate_to="Chinese",
-        max_segment_duration=5.0,
+        max_segment_duration=4.0,
         clean=False,
         max_window_seconds=8.0,
         max_window_segments=3,
         speaker_id=False,
+        input_path=None,
     ):
         self.audio_file_path = audio_file_path
+        self.input_path = input_path
         self.clean = clean
         self.max_window_seconds = max_window_seconds
         self.max_window_segments = max_window_segments
@@ -1140,15 +1153,18 @@ class RealTimeTranscribe:
             self.translation_thread.start()
 
         try:
-            with sd.InputStream(
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype="float32",
-                callback=self._audio_callback,
-                blocksize=self.frame_size,
-            ):
-                while self.running:
-                    time.sleep(0.1)
+            if self.input_path is not None:
+                self._run_file_source()
+            else:
+                with sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    dtype="float32",
+                    callback=self._audio_callback,
+                    blocksize=self.frame_size,
+                ):
+                    while self.running:
+                        time.sleep(0.1)
         except KeyboardInterrupt:
             pass
         finally:
@@ -1161,6 +1177,48 @@ class RealTimeTranscribe:
             print(f"    → {self.final_translation}")
         if self.clean:
             self._print_clean_transcript()
+
+    def _run_file_source(self):
+        """Replay an audio file through the SAME live pipeline (VAD → segments
+        → stability-window re-decode → commits) instead of the mic. Frames are
+        fed exactly as `_audio_callback` would feed them, then a trailing
+        silence flushes the VAD so the last segment closes. The input is saved
+        to `audio_file_path` (as in mic sessions) so `evaluate()` can score the
+        committed transcript against an offline re-transcribe of the same audio.
+        16 kHz mono required (same as the live input)."""
+        assert self.input_path is not None  # only called when run() has a file source
+        assert self.vad_thread is not None  # started in run() before this is invoked
+        assert self.transcription_thread is not None
+        data, sr = sf.read(self.input_path, dtype="float32", always_2d=True)
+        if sr != self.sample_rate:
+            raise ValueError(
+                f"input_path must be {self.sample_rate} Hz, got {sr} Hz "
+                f"({self.input_path})"
+            )
+        if data.shape[1] > 1:
+            data = data.mean(axis=1, keepdims=True)
+        audio = data.flatten()
+        for i in range(0, len(audio), self.frame_size):
+            frame = audio[i : i + self.frame_size]
+            if len(frame) < self.frame_size:
+                frame = np.pad(frame, (0, self.frame_size - len(frame)))
+            self.q_for_vad.put(frame)
+        # Trailing silence closes the last VAD segment (same logic as a pause
+        # on the mic: 0.8 * ring maxlen non-speech frames after speech).
+        silence = np.zeros(
+            self.frame_size * (self.ring_buffer_maxlen + 1), dtype=np.float32
+        )
+        for i in range(0, len(silence), self.frame_size):
+            self.q_for_vad.put(silence[i : i + self.frame_size])
+        self.full_recording_list.append(audio)
+        self.q_for_vad.put(None)
+        # Wait for the VAD worker to drain, then for the transcription worker
+        # to finish the last segments before run() tears the threads down.
+        while self.vad_thread.is_alive():
+            time.sleep(0.05)
+        while not self.q_for_transcription.empty():
+            time.sleep(0.05)
+        time.sleep(0.1)
 
     def evaluate(self):
         if self.audio_file_path is None:

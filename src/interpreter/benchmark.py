@@ -10,7 +10,7 @@ Benchmarks local STT models against gold-reference transcripts:
 Usage:
   uv run python -m interpreter benchmark --list                  # stt models + samples
   uv run python -m interpreter benchmark                         # all stt models
-  uv run python -m interpreter benchmark parakeet-tdt-0.6b-v2 sensevoice
+  uv run python -m interpreter benchmark parakeet-unified-en-0.6b sensevoice
   uv run python -m interpreter benchmark --samples sample_a1
   uv run python -m interpreter benchmark --task translate        # all en->zh models
   uv run python -m interpreter benchmark --task translate opus-mt-en-zh
@@ -321,8 +321,8 @@ class _SherpaSpec:
 
 
 _MODEL_FILES: dict[str, _SherpaSpec] = {
-    "parakeet-tdt-0.6b-v2": _SherpaSpec(
-        repo="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+    "parakeet-unified-en-0.6b": _SherpaSpec(
+        repo="csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
         files={
             "encoder": "encoder.int8.onnx",
             "decoder": "decoder.int8.onnx",
@@ -332,7 +332,7 @@ _MODEL_FILES: dict[str, _SherpaSpec] = {
         factory="from_transducer",
         factory_kwargs={"model_type": "nemo_transducer"},
         tier="en-only",
-        weight_note="int8 NeMo transducer",
+        weight_note="int8 NeMo transducer (offline mode of the unified model)",
     ),
     "parakeet-tdt-0.6b-v3": _SherpaSpec(
         repo="csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
@@ -455,7 +455,7 @@ def make_adapter(name: str) -> Adapter:
 
 def available_models() -> list[str]:
     return [
-        "parakeet-tdt-0.6b-v2",
+        "parakeet-unified-en-0.6b",
         "parakeet-tdt-0.6b-v3",
         "dolphin-small",
         "funasr-nano-2512",

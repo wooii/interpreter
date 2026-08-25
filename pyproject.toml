@@ -15,7 +15,6 @@ dependencies = [
     "numpy>=2.5.2",
     "onnxruntime==1.24.4",
     "sacrebleu>=2.6.0",
-    "sacremoses>=0.2.0",
     "sentencepiece>=0.2.2",
     "sherpa-onnx==1.13.0",
     "sounddevice>=0.5.6",

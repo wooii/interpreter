@@ -7,8 +7,8 @@ model names to configure):
                (`--no-translate` to turn off). Auto speaker ID ON: each segment
                is auto-assigned to a speaker (`self`, `other`, ...) as voices
                appear.
-- `dictate`  — dictation in en/cn/mixed. `--language en-only|mixed` (default
-               mixed), translation OFF by default (`--translate` to turn on).
+- `dictate`  — dictation in en/cn/mixed, no translation. `--en` restricts to
+               English only (default: mixed zh/en).
 - `benchmark`— the model benchmark harness (interpreter.benchmark).
 
 Both live modes record the session to a FLAC in data/listen/ (listen) or
@@ -30,8 +30,6 @@ from interpreter.transcribe import (
     RealTimeTranscribe,
 )
 from interpreter.translate import TRANSLATE_MODEL
-
-MAX_SEGMENT_DURATION = 5.0
 
 
 def _run_live(
@@ -55,7 +53,6 @@ def _run_live(
         stt_model=stt_model,
         translate_model=TRANSLATE_MODEL,
         translate_to="Chinese" if translate else None,
-        max_segment_duration=MAX_SEGMENT_DURATION,
         clean=clean,
         speaker_id=speaker_id,
     )
@@ -78,16 +75,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     p_dictate = sub.add_parser(
-        "dictate", help="dictate in en/cn/mixed (translation off by default)"
+        "dictate", help="dictate in en/cn/mixed (no translation)"
     )
     p_dictate.add_argument(
-        "--translate", action="store_true", help="also translate en->cn"
-    )
-    p_dictate.add_argument(
-        "--language",
-        choices=("en-only", "mixed"),
-        default="mixed",
-        help="language scope (default: mixed)",
+        "--en", action="store_true", help="English only (default: mixed zh/en)"
     )
 
     sub.add_parser(
@@ -115,10 +106,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             speaker_id=True,
         )
     elif args.command == "dictate":
-        stt_model = STT_MODEL_EN_ONLY if args.language == "en-only" else STT_MODEL_MIXED
+        stt_model = STT_MODEL_EN_ONLY if args.en else STT_MODEL_MIXED
         _run_live(
             stt_model=stt_model,
-            translate=args.translate,
+            translate=False,
             mode="dictate",
             clean=True,
         )

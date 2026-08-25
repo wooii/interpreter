@@ -41,14 +41,14 @@ Run from the project root (where `pyproject.toml` is). Models are picked
 internally per task — no model names to configure.
 
 ```bash
-uv run python -m interpreter listen      # transcribe English + translate to Chinese (translate on, speaker ID on)
-uv run python -m interpreter dictate     # dictation, zh/en mixed (translate off)
-uv run python -m interpreter dictate --language en-only   # dictation, English only
-uv run python -m interpreter listen --no-translate        # transcribe English only
-uv run python -m interpreter benchmark --list             # benchmark harness
+uv run python -m interpreter listen                # transcribe English + translate to Chinese (translate on, speaker ID on)
+uv run python -m interpreter listen --no-translate # transcribe English only
+uv run python -m interpreter dictate               # dictation, zh/en mixed (no translation)
+uv run python -m interpreter dictate --en          # dictation, English only
+uv run python -m interpreter benchmark --list      # benchmark harness
 ```
 
-The first run downloads the STT model weights (sherpa-onnx int8: `sensevoice` for mixed, `parakeet-tdt-0.6b-v2` for en-only) and the en→zh translation model anonymously from Hugging Face.
+The first run downloads the STT model weights (sherpa-onnx int8: `sensevoice` for mixed, `parakeet-unified-en-0.6b` for en-only) and the en→zh translation model anonymously from Hugging Face.
 
 ## Roadmap
 
