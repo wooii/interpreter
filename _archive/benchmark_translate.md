@@ -2,9 +2,7 @@
 
 Record date: **2026-08-24** — 100-sentence corpus (wmt19 `newsdev2019`), run in
 the Linux container (8 cores / 8 GB). The 2026-08-23 initial pass is retained as
-reference below. Shared harness policies (container filter, ≤1B rule, license /
-auth rules) and the STT record live in `benchmark_transcribe.md`; speaker ID in
-`benchmark_speaker.md`.
+reference below.
 
 ## Translate task (en → zh): text → text
 
@@ -15,9 +13,8 @@ auth rules) and the STT record live in `benchmark_transcribe.md`; speaker ID in
 - **BLEU(zh)** via sacrebleu with `tokenize="zh"`.
 - **ms/sentence** — decode wall time averaged over the corpus (LLM RTT dominated by
   ollama server round-trips, not model compute).
-- **Peak RSS MB** per model process (the 8 GB budget check; see "Metrics explained"
-  — for ollama models this measures the python client; the ollama *server* RSS is
-  recorded separately).
+- **Peak RSS MB** per model process (the 8 GB budget check; for the ollama baseline
+  this measured the python client — the ollama *server* RSS was recorded separately).
 
 ### How to run
 
@@ -27,8 +24,8 @@ uv run python -m interpreter.benchmark --task translate              # all trans
 uv run python -m interpreter.benchmark --task translate opus-mt-en-zh
 ```
 
-Same container rule as the STT task: prefix with
-`UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync` in the container (AGENTS.md).
+Run in the container: prefix every command with
+`UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync` (AGENTS.md).
 
 Per-model JSONs land in `data/benchmark/translate/results/<model>.json`; the parent
 prints the merged table and writes `data/benchmark/translate/results/merged.json`.

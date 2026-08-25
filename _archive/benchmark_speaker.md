@@ -2,8 +2,7 @@
 
 Record date: **2026-08-24** — probe on a LibriSpeech dev-clean subset (14
 speakers / 1193 clips, CC-BY-4.0, single speaker per file, 16 kHz) in the Linux
-container; product wiring landed the same day. The transcribe / translate
-records live in `benchmark_transcribe.md` / `benchmark_translate.md`.
+container; product wiring landed the same day.
 
 Status: **done (2026-08-24)** — plan picks validated; CAM++ dropped; zh model
 needs zh audio. Product wiring landed the same day (`src/interpreter/speaker.py`,

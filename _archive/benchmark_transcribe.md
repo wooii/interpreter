@@ -3,8 +3,7 @@
 Record date: **2026-08-24** — 60 STT samples per model (20 en-only, 20 zh-only,
 20 zh↔en mixed), 15-model registry, run in the Linux container (8 cores / 8 GB);
 decisions from container numbers only. The 2026-08-23 30-sample pass is retained
-as reference below. The translation record lives in `benchmark_translate.md`;
-speaker ID in `benchmark_speaker.md`.
+as reference below.
 
 Status: **container pass re-run done (2026-08-24)** — 60 STT samples per model (20 en-only, 20 zh-only, 20 zh↔en mixed), 15-model registry; decisions from container numbers only. The 2026-08-23 30-sample pass is retained as reference below.
 
@@ -13,24 +12,18 @@ Status: **container pass re-run done (2026-08-24)** — 60 STT samples per model
 The harness (`src/interpreter/benchmark.py`) selects tasks with `--task`:
 
 - **Transcribe (STT)** — `--task stt` (default): audio → text. Whisper-family, sherpa-onnx ASR, Moonshine. Scored with WER/CER/RTF/RSS. **Historical baseline: `whispercpp-large-v3-turbo-q5_0`** (whisper.cpp via pywhispercpp — dropped from the product 2026-08-24; see the Phase 1 conclusion).
-- **Translate (en → zh)** — `--task translate`: text → text; record in `benchmark_translate.md`. Scored with BLEU(zh), ms/sentence, RSS. **Product default: `opus-mt-en-zh`.**
 
 Directory layout:
 
 ```
 data/benchmark/
-├── transcribe/                    # STT assets
-│   ├── manifest.json              # STT samples (60: 20 en / 20 zh / 20 mixed, gold refs + blocks)
-│   ├── models/                    # downloaded STT weights
-│   ├── samples/                   # STT audio
-│   └── results/
-│       ├── <model>.json           # per-model STT results
-│       └── merged.json            # STT merged table
-└── translate/                     # en->zh assets
-    ├── manifest.json              # 100 sentences (wmt19 newsdev2019)
+└── transcribe/                    # STT assets
+    ├── manifest.json              # STT samples (60: 20 en / 20 zh / 20 mixed, gold refs + blocks)
+    ├── models/                    # downloaded STT weights
+    ├── samples/                   # STT audio
     └── results/
-        ├── <model>.json           # per-model translate results
-        └── merged.json            # translate merged table
+        ├── <model>.json           # per-model STT results
+        └── merged.json            # STT merged table
 ```
 
 ## Policy: the container is the model filter
@@ -46,21 +39,19 @@ exclusions are rare — size/license policy exclusions (below) now dominate.
 
 - **≤1B parameter policy** — models larger than 1 billion parameters (published
   size) are out of benchmark scope. Applied retroactively: faster-whisper
-  `large-v3` (1.55B) removed from the registry; Qwen3-ASR `1.7B` (removed
-  2026-08-23) was already out; never-benchmarked candidates excluded by size:
-  Cohere Transcribe (2B), FireRedASR-AED/-2-AED (1.1B), GLM-ASR-Nano (1.5B),
-  Gemma 3n / TranslateGemma (gated weights, >1B effective), Kimi-Audio (7B).
+`large-v3` (1.55B) removed from the registry; Qwen3-ASR `1.7B` (removed
+   2026-08-23) was already out; never-benchmarked candidates excluded by size:
+   Cohere Transcribe (2B), FireRedASR-AED/-2-AED (1.1B), GLM-ASR-Nano (1.5B),
+   Kimi-Audio (7B).
 - **Ruling on ARK-ASR-0.6B**: published size (0.6B decoder) counts; its
   end-to-end parameter count is ~1.2B (0.6B decoder + 0.6B audio encoder) —
   flagged, not excluded. Same class of model as Qwen3-ASR-0.6B.
 - **License policy** (product rule: no CC-BY-NC or stricter in the MIT repo):
-  excluded — Canary-1b v1 (CC-BY-NC-4.0), NLLB-200 (CC-BY-NC), MADLAD-400
-  (gated, CC-BY-NC). CC-BY-4.0 models (Parakeet, Canary v2/flash, Nemotron,
+  excluded — Canary-1b v1 (CC-BY-NC-4.0). CC-BY-4.0 models (Parakeet, Canary v2/flash, Nemotron,
   Moonshine) are fine with attribution. VoxCPM is TTS, not ASR — out of scope.
 - **No auth-gated downloads (2026-08-24)** — models that require
-  authentication to download are excluded (the container has no credentials):
-  Qwen3-MT-0.6B (gated on HF, no ModelScope mirror), Gemma 3n / TranslateGemma
-  (manual license gate). Everything benchmarked downloads anonymously.
+  authentication to download are excluded (the container has no credentials).
+  Everything benchmarked downloads anonymously.
 - **Language scope** (zh↔en product): Canary v2/flash (25 EU langs, no zh),
   omniASR (MMS-derived, CC-BY-NC, low-resource focus), Wren-ASR (no zh) are
   excluded by language/license rather than size.
@@ -94,9 +85,7 @@ exclusions are rare — size/license policy exclusions (below) now dominate.
 | **CER** | Character Error Rate via jiwer — same formula at character level. Used for zh blocks: zh has no word boundaries and the reference is word-segmented while model output is not; unspaced/glued zh hypothesis words are attributed to the nearest zh block via word alignment. |
 | **en+zh mixed** | Mean of the per-sample block scores on mixed samples (en block WER + zh block CER averaged per sample). >1.0 is possible — zh char CER has no upper bound (insertion-heavy hypotheses). |
 | **RTF** | Real-Time Factor = decode wall time ÷ audio duration. < 1.0 means the model processes faster than real time. Container numbers are relative (the M4 host is faster; ~13–18× on the old 4-core profile); the *ranking* is what matters. |
-| **RSS MB** | Peak **Resident Set Size** of the model's benchmark process, in MB — the maximum physical RAM the process held during the run, measured per model via `getrusage(ru_maxrss)` (`benchmark.py:197`; reported in KB on Linux, bytes on macOS, normalized to MB). It is the memory-budget check: one model per subprocess, so each measurement is isolated and memory is fully released between models; a model that exceeds the budget is OOM-killed (exit −9/137) and recorded as `excluded: OOM`. Caveats: shared-library pages are counted per process (can double-count across processes), and for the ollama translate baseline the column measures the python *client* only — the ollama server is a separate daemon whose RSS is recorded separately. |
-| **BLEU(zh)** (translate) | sacrebleu corpus BLEU with `tokenize="zh"` over the 100-sentence wmt19 newsdev2019 corpus. |
-| **ms/sentence** (translate) | Decode wall time averaged over the corpus. For ollama models this is dominated by server round-trips, not model compute. |
+| **RSS MB** | Peak **Resident Set Size** of the model's benchmark process, in MB — the maximum physical RAM the process held during the run, measured per model via `getrusage(ru_maxrss)` (`benchmark.py:197`; reported in KB on Linux, bytes on macOS, normalized to MB). It is the memory-budget check: one model per subprocess, so each measurement is isolated and memory is fully released between models; a model that exceeds the budget is OOM-killed (exit −9/137) and recorded as `excluded: OOM`. Caveats: shared-library pages are counted per process (can double-count across processes). |
 
 ### How to run
 
@@ -142,8 +131,8 @@ Models in this pass (15): whispercpp `large-v3-turbo-q5_0` (baseline), `base`,
 streaming-medium, Parakeet TDT 0.6B v2 **and v3**, Dolphin small, Fun-ASR-Nano-2512,
 SenseVoiceSmall, Qwen3-ASR `0.6B` (re-run — fits the 8 GB budget now), ARK-ASR-0.6B.
 Excluded by policy (see above): faster-whisper `large-v3` (1.55B), Qwen3-ASR `1.7B`,
-Cohere Transcribe (2B), FireRedASR (1.1B), GLM-ASR-Nano (1.5B), Canary-1b (CC-BY-NC),
-MADLAD-400 (CC-BY-NC), Qwen3-MT-0.6B (auth-gated). Not runnable with the pinned
+Cohere Transcribe (2B), FireRedASR (1.1B), GLM-ASR-Nano (1.5B), Canary-1b (CC-BY-NC).
+Not runnable with the pinned
 sherpa-onnx 1.13.x (factories unreleased): X-ASR streaming zh-en, Nemotron-3.5
 streaming 0.6B — logged as candidates for a future round.
 
@@ -236,16 +225,11 @@ loses its role. It is dominated on every axis measured: worse en WER than Parake
 (0.191 vs 0.148) at ~95× the compute, worst-in-class zh (0.644 — whisper English
 misdetection), mixed 0.526 vs SenseVoice's 0.182, and the highest RTF in the table
 (2.587). No config cell keeps it; it survives only as the historical measurement
-anchor. Phase 1 conclusion: **listen → Parakeet v2, dictate → SenseVoiceSmall**,
-translate → **opus-mt-en-zh (the only backend)** — best BLEU
-(33.59 vs the qwen3.5 baseline's 24.16); the qwen3.5 LLM quality mode was **dropped
-2026-08-24** after a live en→zh dictation A/B showed hallucinated content and a
-meaning-reversed error ("choose this model instead" → 换成另一种方式) at higher latency
-(docs in PLAN.md). Implemented in `transcribe.py` on 2026-08-24 (sherpa STT backends +
-the opus-mt translate backend; whisper.cpp and Moonshine dropped the same day);
-per-mode defaults in
+anchor. Phase 1 conclusion: **listen → Parakeet v2, dictate → SenseVoiceSmall**.
+Implemented in `transcribe.py` on 2026-08-24 (sherpa STT backends; whisper.cpp and
+Moonshine dropped the same day); per-mode defaults in
 `profiles/` land with the Phase 2
-config plumbing. **Interim product default (2026-08-24): `sensevoice` + `opus-mt-en-zh`** —
+config plumbing. **Interim product default (2026-08-24): `sensevoice`** —
 until Phase 2 wires per-mode config, the single STT default is the dictate/multilingual
 winner (only true code-switcher, fastest + lightest model in the benchmark; en-only
 accuracy takes a small hit vs Parakeet in the interim), with parakeet-tdt-0.6b-v2
@@ -298,8 +282,8 @@ Dolphin (en-deaf; keep only for a hypothetical pure-zh config); Fun-ASR-Nano-251
 (60 s cap, drops one language in mixed clips); ARK-ASR-0.6B (6848 MB RSS ≈ 86% of the
 8 GB budget, no accuracy win — the container filter settles what the ≤1B ruling left
 open); Parakeet v3 (en non-upgrade over v2). Faster-whisper `large-v3`, Qwen3-ASR
-`1.7B`, Cohere Transcribe, FireRedASR, GLM-ASR-Nano, Canary-1b, MADLAD-400,
-Qwen3-MT-0.6B: out by the ≤1B / license / auth policy (see "Model scope policy").
+`1.7B`, Cohere Transcribe, FireRedASR, GLM-ASR-Nano, Canary-1b: out by the
+≤1B / license / auth policy (see "Model scope policy").
 
 **Phase 2 implications:** one `SherpaStt` backend, config-driven model choice (both
 winners run on sherpa-onnx int8); **Moonshine dropped 2026-08-24** (see above) — the
