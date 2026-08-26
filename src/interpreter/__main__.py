@@ -9,6 +9,7 @@ model names to configure):
                appear.
 - `dictate`  — dictation in en/cn/mixed, no translation. `--en` restricts to
                English only (default: mixed zh/en).
+- `app`      — launch the local desktop GUI (PySide6) over the same engine.
 - `benchmark`— the model benchmark harness (interpreter.benchmark).
 
 Both live modes record the session to a FLAC in data/listen/ (listen) or
@@ -42,7 +43,7 @@ def _run_live(
 ) -> None:
     mode_dir = DATA_DIR / mode
     mode_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     audio_file = mode_dir / f"{mode}_{timestamp}.flac"
     print(
         "Loading models (first run downloads weights from Hugging Face)...",
@@ -84,6 +85,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "benchmark", help="model benchmark harness (see --help after benchmark)"
     )
+    sub.add_parser(
+        "app",
+        help="launch the local desktop GUI (PySide6 window over the same engine)",
+    )
     return parser
 
 
@@ -113,6 +118,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             mode="dictate",
             clean=True,
         )
+    elif args.command == "app":
+        from interpreter.app import main as app_main
+
+        app_main()
 
 
 if __name__ == "__main__":

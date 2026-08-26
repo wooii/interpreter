@@ -13,6 +13,11 @@ Desktop.ini
 /data/
 
 
+# --- Build ---
+/build/
+/dist/
+
+
 # --- Secrets ---
 .env
 

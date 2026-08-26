@@ -10,7 +10,7 @@ Benchmarks local STT models against gold-reference transcripts:
 Usage:
   uv run python -m interpreter benchmark --list                  # stt models + samples
   uv run python -m interpreter benchmark                         # all stt models
-  uv run python -m interpreter benchmark parakeet-unified-en-0.6b sensevoice
+  uv run python -m interpreter benchmark parakeet-unified-en-0.6b sensevoicesmall
   uv run python -m interpreter benchmark --samples sample_a1
   uv run python -m interpreter benchmark --task translate        # all en->zh models
   uv run python -m interpreter benchmark --task translate opus-mt-en-zh
@@ -357,7 +357,7 @@ _MODEL_FILES: dict[str, _SherpaSpec] = {
         tier="multilingual",
         weight_note="Qwen3-0.6B-based LLM ASR, int8",
     ),
-    "sensevoice": _SherpaSpec(
+    "sensevoicesmall": _SherpaSpec(
         repo="csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
         files={
             "model": "model.int8.onnx",
@@ -445,7 +445,7 @@ def available_models() -> list[str]:
         "parakeet-unified-en-0.6b",
         "dolphin-small",
         "funasr-nano-2512",
-        "sensevoice",
+        "sensevoicesmall",
         "qwen3-asr-0.6b",
     ]
 

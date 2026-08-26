@@ -14,6 +14,7 @@ dependencies = [
     "noisereduce>=3.0.3",
     "numpy>=2.5.2",
     "onnxruntime==1.24.4",
+    "pyside6>=6.11.2",
     "sacrebleu>=2.6.0",
     "sentencepiece>=0.2.2",
     "sherpa-onnx==1.13.0",

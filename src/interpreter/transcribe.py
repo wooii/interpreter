@@ -11,7 +11,7 @@ Quick start (defaults: SenseVoice STT + opus-mt-en-zh translation):
 Model selection (the CLI picks models internally per task — see __main__.py;
 the library still accepts explicit names):
 
-    RealTimeTranscribe(stt_model="sensevoice")             # default; zh<->en code-switching
+    RealTimeTranscribe(stt_model="sensevoicesmall")        # default; zh<->en code-switching
     RealTimeTranscribe(stt_model="parakeet-unified-en-0.6b")  # en-only / listen (offline mode)
 
     RealTimeTranscribe(translate_model="opus-mt-en-zh")    # default; dedicated NMT, en->zh
@@ -39,7 +39,7 @@ Standalone use (no mic): transcribe a 16 kHz mono file or array directly
     from interpreter.transcribe import SpeechToText
     from interpreter.translate import Translator
 
-    stt = SpeechToText("sensevoice")            # or "parakeet-unified-en-0.6b"
+    stt = SpeechToText("sensevoicesmall")       # or "parakeet-unified-en-0.6b"
     text = stt.extract_text(stt.transcribe_file("clip.wav"))
     print(Translator().translate(text))         # opus-mt-en-zh -> Chinese
 
@@ -58,6 +58,7 @@ import shutil
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -73,7 +74,7 @@ from interpreter.speaker import UNCERTAIN, SpeakerAssigner
 from interpreter.translate import Translator
 
 STT_MODEL_EN_ONLY = "parakeet-unified-en-0.6b"
-STT_MODEL_MIXED = "sensevoice"
+STT_MODEL_MIXED = "sensevoicesmall"
 
 
 def _contains_cjk(text: str) -> bool:
@@ -115,6 +116,53 @@ def _join_text_parts(parts, force_space=False) -> str:
 def _norm(text: str) -> str:
     """Whitespace-collapsed, lowercased view for stability comparison."""
     return "".join(ch for ch in text.lower() if not ch.isspace())
+
+
+def _strip_timing(text: str) -> str:
+    """Drop the "(0.1234s)" timing suffix the translation worker appends."""
+    if text.endswith("s)") and " (" in text:
+        return text.rsplit(" (", 1)[0]
+    return text
+
+
+def _flowing_text(chunk_plains: list[str], window_plain: str | None) -> str:
+    """The clean (dictate) rendering: every committed chunk with punctuation
+    appended, plus the live window, joined as one flowing string."""
+    parts = [c + _chunk_punct(c) for c in chunk_plains if c]
+    if window_plain:
+        parts.append(window_plain)
+    return _join_text_parts(parts, force_space=True)
+
+
+def _flowing_styled_parts(
+    chunk_plains: list[str],
+    chunk_styleds: list[str],
+    window_plain: str | None,
+    window_styled: str | None,
+) -> list[str]:
+    """Styled counterpart of `_flowing_text`'s parts: the per-word colored
+    twin of each committed chunk (punctuation appended after the color reset)
+    plus the live window's styled twin. Used only when the snapshot actually
+    carries confidence colors (en-only/parakeet — see `_has_confidence_colors`);
+    the renderer maps the ANSI colors to its own format and joins with spaces."""
+    parts: list[str] = []
+    for plain, styled in zip(chunk_plains, chunk_styleds):
+        if not plain:
+            continue
+        parts.append((styled or plain) + _chunk_punct(plain))
+    if window_plain:
+        parts.append(window_styled or window_plain)
+    return parts
+
+
+def _has_confidence_colors(snapshot: TranscriptSnapshot) -> bool:
+    """True when the snapshot's styled twins carry real per-word confidence
+    colors (`\x1b[38;2;…m`). Only transducer models (parakeet en-only) expose
+    per-token log-probs; SenseVoice has none, so its styled stays plain and
+    mixed dictate renders uncolored."""
+    return any("\x1b[38;2;" in c.styled for c in snapshot.chunks) or (
+        snapshot.window is not None and "\x1b[38;2;" in snapshot.window.styled
+    )
 
 
 def _stable_prefix(full: str, prefix: str) -> bool:
@@ -218,7 +266,7 @@ MODEL_SPECS: dict[str, dict] = {
         "factory": "from_transducer",
         "kwargs": {"model_type": "nemo_transducer"},
     },
-    "sensevoice": {
+    "sensevoicesmall": {
         "repo": "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
         "files": {
             "model": "model.int8.onnx",
@@ -369,7 +417,7 @@ class SherpaStt:
     Model choice (PLAN.md 2026-08-25): en-only -> parakeet-unified-en-0.6b
     (offline mode of the unified model — beats parakeet-tdt-0.6b-v2 at every
     segment cap on the Phase 3 probe; true streaming is not real-time on the
-    container), mixed -> sensevoice; both sherpa-onnx int8
+    container), mixed -> sensevoicesmall; both sherpa-onnx int8
     (whisper.cpp/Moonshine dropped). Weights download anonymously from HF.
     """
 
@@ -421,7 +469,7 @@ class SpeechToText:
     dropped — see _archive/benchmark_transcribe.md for the reasons).
 
     model_name:
-      - "sensevoice"                  product default (sherpa int8; dictate/multilingual winner)
+      - "sensevoicesmall"              product default (sherpa int8; dictate/multilingual winner)
       - "parakeet-unified-en-0.6b"    en-only / listen default (sherpa int8 transducer; offline mode —
                                       streaming not real-time on the container, PLAN.md 2026-08-25)
 
@@ -444,9 +492,143 @@ class SpeechToText:
 
     def extract_text(self, result):
         text = " ".join([i.text for i in result]).strip()
-        if self.model_name == "sensevoice":
+        if self.model_name == "sensevoicesmall":
             text = _normalize_sensevoice_case(text)
         return text
+
+
+@dataclass(frozen=True)
+class ChunkSnapshot:
+    plain: str
+    styled: str
+    ts: str
+    compute: float | None
+    translation: str | None
+    speaker: str | None
+
+
+@dataclass(frozen=True)
+class WindowSnapshot:
+    plain: str
+    styled: str
+    ts: str | None
+    compute: float | None
+    translation: str | None
+    speaker: str | None
+
+
+@dataclass(frozen=True)
+class TranscriptSnapshot:
+    """Immutable view of the live transcript state, built under display_lock.
+    Renderers (terminal, GUI) consume this and never touch engine state."""
+
+    stt_model: str
+    translator_model: str | None
+    target_lang: str | None
+    speaker_names: tuple[str, ...] | None  # None = speaker ID off
+    chunks: tuple[ChunkSnapshot, ...]
+    window: WindowSnapshot | None
+
+
+class BaseRenderer:
+    """Rendering hook: receives immutable snapshots of the live state. The
+    terminal renderer is the default; a GUI renderer (see app.py) consumes the
+    same snapshots. All methods are called from engine worker threads."""
+
+    def begin(self) -> None:
+        """Called once when run() starts."""
+
+    def render(self, snapshot: TranscriptSnapshot) -> None:
+        """Called on every state change (window re-decode, commit, translation)."""
+
+    def end(self) -> None:
+        """Called once after run() stops (session already finalized)."""
+
+
+class TerminalRenderer(BaseRenderer):
+    """Reproduce the CLI's live terminal output exactly from snapshots. The
+    alternate-screen enter/exit and the dim "[?]" styling depend on `tty`."""
+
+    def __init__(self, clean: bool = False) -> None:
+        self.clean = clean
+
+    def begin(self) -> None:
+        if sys.stdout.isatty():
+            sys.stdout.write("\x1b[?1049h")
+
+    def end(self) -> None:
+        if sys.stdout.isatty():
+            sys.stdout.write("\x1b[?1049l")
+            sys.stdout.flush()
+
+    def render(self, snapshot: TranscriptSnapshot) -> None:
+        tty = sys.stdout.isatty()
+        if tty:
+            sys.stdout.write("\x1b[2J\x1b[H")
+        for line in [*self._header_lines(snapshot), *self._lines(snapshot, tty)]:
+            sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+    def _lines(self, snapshot: TranscriptSnapshot, tty: bool) -> list[str]:
+        if self.clean:
+            if _has_confidence_colors(snapshot):
+                text = _join_text_parts(
+                    _flowing_styled_parts(
+                        [c.plain for c in snapshot.chunks],
+                        [c.styled for c in snapshot.chunks],
+                        snapshot.window.plain if snapshot.window else None,
+                        snapshot.window.styled if snapshot.window else None,
+                    ),
+                    force_space=True,
+                )
+            else:
+                text = _flowing_text(
+                    [c.plain for c in snapshot.chunks],
+                    snapshot.window.plain if snapshot.window else None,
+                )
+            return [text] if text else []
+        lines: list[str] = []
+        for c in snapshot.chunks:
+            lines.append(self._fmt_meta_line(c.ts, c.styled, c.compute, c.speaker, tty))
+            if c.translation:
+                lines.append(f"    → {c.translation}")
+        if snapshot.window is not None:
+            lines.append(
+                self._fmt_meta_line(
+                    snapshot.window.ts,
+                    snapshot.window.styled,
+                    snapshot.window.compute,
+                    snapshot.window.speaker,
+                    tty,
+                )
+            )
+            if snapshot.window.translation:
+                lines.append(f"    → {snapshot.window.translation}")
+        return lines
+
+    @staticmethod
+    def _fmt_meta_line(ts, styled, compute, speaker, tty) -> str:
+        prefix = f"[{speaker}] " if speaker else ""
+        if speaker == UNCERTAIN and tty:
+            prefix = "\033[2m[?]\033[0m "
+        suffix = f" ({compute:.4f}s)" if compute is not None else ""
+        return f"{prefix}[{ts}] {styled}{suffix}"
+
+    @staticmethod
+    def _header_lines(snapshot: TranscriptSnapshot) -> list[str]:
+        lines = [
+            "Real-time transcribe... (Ctrl+C to stop)",
+            f"Speech-to-text model: {snapshot.stt_model}",
+        ]
+        if snapshot.speaker_names is not None:
+            names = ", ".join(snapshot.speaker_names) or "waiting for first voice"
+            lines.append(f"Speaker ID: WeSpeaker en (auto-assign: {names})")
+        if snapshot.translator_model:
+            lines.append(
+                f"Translation model: {snapshot.translator_model} → "
+                f"{snapshot.target_lang}"
+            )
+        return lines
 
 
 class RealTimeTranscribe:
@@ -462,10 +644,18 @@ class RealTimeTranscribe:
         max_window_segments=3,
         speaker_id=False,
         input_path=None,
+        resume_from=None,
+        renderer: BaseRenderer | None = None,
+        quiet: bool = False,
     ):
         self.audio_file_path = audio_file_path
         self.input_path = input_path
+        self.resume_from = Path(resume_from) if resume_from is not None else None
         self.clean = clean
+        self.quiet = quiet
+        self.renderer = (
+            renderer if renderer is not None else TerminalRenderer(clean=clean)
+        )
         self.max_window_seconds = max_window_seconds
         self.max_window_segments = max_window_segments
         self.max_segment_duration = max_segment_duration
@@ -572,10 +762,9 @@ class RealTimeTranscribe:
         self._window_seq = 0
         self._last_window_translation_text = ""
         self.final_translation = None
-        self._tty = False
 
     def _audio_callback(self, indata, frames, time_info, status):
-        if status:
+        if status and not self.quiet:
             print(status)
         audio_data = indata.flatten()
         if self.audio_file_path:
@@ -639,21 +828,23 @@ class RealTimeTranscribe:
         return f"\033[38;2;{r};{g};{b}m{word}\033[0m"
 
     def _format_transcript(self, result):
-        # Returns colored text for the transcription. Per-word confidence
-        # from the sherpa transducer's word_probs (when present) — skips
-        # empty segments/words.
+        # Colored text for the transcription. Per-word confidence from the
+        # sherpa transducer's word_probs (when present) — skips empty
+        # segments/words. Segments WITHOUT per-token scores (SenseVoice)
+        # stay plain: coloring them with the uniform 1.0 probability was
+        # fake confidence, not an absence of color.
         parts = []
         for seg in result:
             word_probs = getattr(seg, "word_probs", None)
             if word_probs:
                 parts.append(" ".join(self._color_word(w, p) for w, p in word_probs))
             elif seg.text.strip():
-                parts.append(self._color_word(seg.text.strip(), seg.probability))
+                parts.append(seg.text.strip())
         return " ".join(parts).strip()
 
     def _get_time_str(self):
         elapsed = time.time() - self.start_time
-        return f"{int(elapsed // 60):02d}:{elapsed % 60:06.3f}"
+        return f"{int(elapsed // 60):02d}:{elapsed % 60:05.2f}"
 
     def _print_clean_transcript(self):
         parts = [c + _chunk_punct(c) for c in self.committed_chunks if c]
@@ -913,60 +1104,61 @@ class RealTimeTranscribe:
                 ("commit", len(self.committed_chunks) - 1, plain)
             )
 
-    def _fmt_meta_line(self, ts, styled, compute, speaker=None):
-        prefix = f"[{speaker}] " if speaker else ""
-        if speaker == UNCERTAIN and self._tty:
-            prefix = "\033[2m[?]\033[0m "
-        suffix = f" ({compute:.4f}s)" if compute is not None else ""
-        return f"{prefix}[{ts}] {styled}{suffix}"
-
-    def _render_lines(self):
-        if self.clean:
-            parts = [c + _chunk_punct(c) for c in self.committed_chunks if c]
+    def _build_snapshot(self) -> TranscriptSnapshot:
+        """Immutable view of the live state for renderers, taken under the
+        display lock (the parallel committed_* lists are appended atomically
+        there — a renderer reading them mid-append would hit an IndexError)."""
+        with self.display_lock:
+            chunks = tuple(
+                ChunkSnapshot(
+                    plain=self.committed_chunks[i],
+                    styled=self.committed_styled[i],
+                    ts=self.committed_ts[i],
+                    compute=self.committed_compute[i],
+                    translation=(
+                        self.committed_translations[i]
+                        if i < len(self.committed_translations)
+                        else None
+                    ),
+                    speaker=(
+                        self.committed_speakers[i]
+                        if i < len(self.committed_speakers)
+                        else None
+                    ),
+                )
+                for i in range(len(self.committed_chunks))
+            )
+            window = None
             if self.window_plain:
-                parts.append(self.window_plain)
-            text = _join_text_parts(parts, force_space=True)
-            return [text] if text else []
-        lines = []
-        for i in range(len(self.committed_chunks)):
-            lines.append(
-                self._fmt_meta_line(
-                    self.committed_ts[i],
-                    self.committed_styled[i],
-                    self.committed_compute[i],
-                    self.committed_speakers[i]
-                    if i < len(self.committed_speakers)
-                    else None,
+                window = WindowSnapshot(
+                    plain=self.window_plain,
+                    styled=self.window_styled,
+                    ts=self.window_ts,
+                    compute=self.window_compute,
+                    translation=self.window_translation,
+                    speaker=self._window_chunk_speaker(include_newest=True),
                 )
+            speaker_names = (
+                tuple(self.speaker.speaker_names) if self.speaker is not None else None
             )
-            tr = self.committed_translations[i]
-            if tr:
-                lines.append(f"    → {tr}")
-        if self.window_plain:
-            lines.append(
-                self._fmt_meta_line(
-                    self.window_ts,
-                    self.window_styled,
-                    self.window_compute,
-                    self._window_chunk_speaker(include_newest=True),
-                )
+            return TranscriptSnapshot(
+                stt_model=self.stt_model_name,
+                translator_model=(
+                    self.translator.model if self.translator is not None else None
+                ),
+                target_lang=(
+                    self.translator.target_lang if self.translator is not None else None
+                ),
+                speaker_names=speaker_names,
+                chunks=chunks,
+                window=window,
             )
-            if self.window_translation:
-                lines.append(f"    → {self.window_translation}")
-        return lines
 
     def _redraw(self):
-        """Redraw the running transcript. In a tty the redraw runs in the
-        alternate screen buffer (vim-style): clear everything and reprint the
-        header + transcript, so no cursor-up/erase-line bookkeeping is needed
-        and no escape sequences leak into scrollback. Non-tty output prints
-        append-only (no ANSI)."""
-        with self.display_lock:
-            if self._tty:
-                sys.stdout.write("\x1b[2J\x1b[H")
-            for line in [*self._header_lines(), *self._render_lines()]:
-                sys.stdout.write(line + "\n")
-            sys.stdout.flush()
+        """Push the current state to the renderer. The engine holds no display
+        concern — the default TerminalRenderer reproduces the CLI's alternate-
+        screen redraw from the snapshot; a GUI renderer consumes the same data."""
+        self.renderer.render(self._build_snapshot())
 
     def _finalize(self):
         parts = list(self.committed_chunks)
@@ -974,21 +1166,18 @@ class RealTimeTranscribe:
             parts.append(self.window_plain)
         self.transcript = [_join_text_parts(parts)]
 
-    @staticmethod
-    def _strip_timing(text: str) -> str:
-        """Drop the "(0.1234s)" timing suffix the translation worker appends."""
-        if text.endswith("s)") and " (" in text:
-            return text.rsplit(" (", 1)[0]
-        return text
-
     def _save_transcript(self):
-        """Write the session transcript as plain text next to the audio file.
-        Dictate (clean): the single clean text, as printed at the end. Listen:
-        one line per chunk with timestamp + speaker tag, translations indented
-        under their chunk — no ANSI colors, no compute times."""
+        """Write the session transcript as plain text next to the audio file,
+        plus a `.styled` twin that keeps the per-word ANSI confidence colors
+        (the GUI re-renders it with the original color coding). Dictate
+        (clean): the single clean text, as printed at the end. Listen: one
+        line per chunk with timestamp + speaker tag, translations indented
+        under their chunk — no ANSI colors in the plain file; the styled twin
+        mirrors the same lines with the colored chunk text."""
         if self.audio_file_path is None:
             return
         lines: list[str] = []
+        styled_lines: list[str] = []
         if self.clean:
             parts = [c + _chunk_punct(c) for c in self.committed_chunks if c]
             if self.window_plain:
@@ -996,6 +1185,16 @@ class RealTimeTranscribe:
             text = _join_text_parts(parts, force_space=True)
             if text:
                 lines.append(text)
+                styled_lines.append(
+                    " ".join(
+                        _flowing_styled_parts(
+                            list(self.committed_chunks),
+                            list(self.committed_styled),
+                            self.window_plain,
+                            self.window_styled,
+                        )
+                    )
+                )
         else:
             for i, chunk in enumerate(self.committed_chunks):
                 speaker = (
@@ -1007,22 +1206,49 @@ class RealTimeTranscribe:
                 if speaker:
                     line += f" [{speaker}]"
                 lines.append(f"{line} {chunk}")
+                styled_chunk = (
+                    self.committed_styled[i]
+                    if i < len(self.committed_styled)
+                    else chunk
+                )
+                styled_lines.append(f"{line} {styled_chunk}")
                 tr = self.committed_translations[i]
                 if tr:
-                    lines.append(f"    → {self._strip_timing(tr)}")
+                    lines.append(f"    → {_strip_timing(tr)}")
+                    styled_lines.append(f"    → {_strip_timing(tr)}")
             if self.window_plain:
                 speaker = self._window_chunk_speaker(include_newest=True)
                 line = f"[{self.window_ts}]"
                 if speaker:
                     line += f" [{speaker}]"
                 lines.append(f"{line} {self.window_plain}")
+                styled_lines.append(f"{line} {self.window_styled or self.window_plain}")
                 if self.final_translation:
-                    lines.append(f"    → {self._strip_timing(self.final_translation)}")
+                    lines.append(f"    → {_strip_timing(self.final_translation)}")
+                    styled_lines.append(
+                        f"    → {_strip_timing(self.final_translation)}"
+                    )
         if not lines:
             return
         txt_path = self.audio_file_path.with_suffix(".txt")
-        txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"Transcript saved to {txt_path}")
+        styled_path = self.audio_file_path.with_suffix(".styled")
+        # Resume: append the new lines to the CURRENT on-disk content (read
+        # before the write below), so earlier lines — hand-edits included —
+        # survive. Only when the old audio still exists, matching the audio
+        # merge in `_stop`.
+        old_lines: list[str] = []
+        old_styled_lines: list[str] = []
+        if self.resume_from is not None and self.resume_from.is_file():
+            if txt_path.is_file():
+                old_lines = txt_path.read_text(encoding="utf-8").splitlines()
+            if styled_path.is_file():
+                old_styled_lines = styled_path.read_text(encoding="utf-8").splitlines()
+        txt_path.write_text("\n".join(old_lines + lines) + "\n", encoding="utf-8")
+        styled_path.write_text(
+            "\n".join(old_styled_lines + styled_lines) + "\n", encoding="utf-8"
+        )
+        if not self.quiet:
+            print(f"Transcript saved to {txt_path}")
 
     def _transcription_worker(self):
         while self.running:
@@ -1113,30 +1339,31 @@ class RealTimeTranscribe:
             if self.audio_file_path.suffix.lower() == ".flac":
                 full_audio = np.clip(full_audio, -1.0, 1.0)
                 full_audio = (full_audio * 32767).astype(np.int16)
+            if self.resume_from is not None and self.resume_from.is_file():
+                # Resume: the new audio appends to the previous recording (the
+                # old file is read BEFORE the merged write below).
+                old_audio, old_sr = sf.read(self.resume_from, dtype="int16")
+                if old_sr != self.sample_rate:
+                    raise ValueError(
+                        f"cannot resume: existing recording is {old_sr} Hz, "
+                        f"the engine records at {self.sample_rate} Hz "
+                        f"({self.resume_from})"
+                    )
+                full_audio = np.concatenate([old_audio, full_audio])
             sf.write(self.audio_file_path, full_audio, self.sample_rate)
-            print(f"Audio saved to {self.audio_file_path}")
+            if not self.quiet:
+                print(f"Audio saved to {self.audio_file_path}")
             self._save_transcript()
 
-    def _header_lines(self) -> list[str]:
-        """Static header text, rebuilt per redraw so the auto-assigned speaker
-        names stay live ("waiting for first voice" -> self, other, ...)."""
-        lines = [
-            "Real-time transcribe... (Ctrl+C to stop)",
-            f"Speech-to-text model: {self.stt_model_name}",
-        ]
-        if self.speaker is not None:
-            names = ", ".join(self.speaker.speaker_names) or "waiting for first voice"
-            lines.append(f"Speaker ID: WeSpeaker en (auto-assign: {names})")
-        if self.translator:
-            lines.append(
-                f"Translation model: {self.translator.model} → {self.translator.target_lang}"
-            )
-        return lines
+    def stop(self):
+        """Request a clean stop (public wrapper): flips `running` so `run()`'s
+        mic loop exits on its own, then run() finalizes and writes the session
+        files — no callback can race the file write because the InputStream has
+        already closed by then. Safe to call from any thread."""
+        self.running = False
 
     def run(self):
-        self._tty = sys.stdout.isatty()
-        if self._tty:
-            sys.stdout.write("\x1b[?1049h")
+        self.renderer.begin()
         self._redraw()
         self.running = True
         self.start_time = time.time()
@@ -1168,15 +1395,15 @@ class RealTimeTranscribe:
         except KeyboardInterrupt:
             pass
         finally:
-            if self._tty:
-                sys.stdout.write("\x1b[?1049l")
-                sys.stdout.flush()
-        print("\nStopping...")
+            self.renderer.end()
+        if not self.quiet:
+            print("\nStopping...")
         self._stop()
-        if not self.clean and self.translator and self.final_translation:
-            print(f"    → {self.final_translation}")
-        if self.clean:
-            self._print_clean_transcript()
+        if not self.quiet:
+            if not self.clean and self.translator and self.final_translation:
+                print(f"    → {self.final_translation}")
+            if self.clean:
+                self._print_clean_transcript()
 
     def _run_file_source(self):
         """Replay an audio file through the SAME live pipeline (VAD → segments
