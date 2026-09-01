@@ -1,59 +1,31 @@
-"""Online speaker assignment for listen mode (Phase 3, 2026-08-24).
+"""Online speaker assignment for listen (Phase 3).
 
-Auto-assigns each VAD segment to a speaker via WeSpeaker embeddings
-(sherpa-onnx `SpeakerEmbeddingExtractor`). No enrollment step: the registry
-starts empty and names speakers as they appear — first voice = `self`,
-second = `other`, then `speaker 3`, `speaker 4`, ... (auto-expanding).
-Listen only → the en model only.
-
-Assignment semantics (relative acceptance, 2026-08-24): a segment is tagged
-with the best-matching speaker when its cosine similarity to that centroid
-meets the speaker's own internal-consistency bar — within
-`CONFIDENCE_DELTA` of the cluster's mean member similarity, floored at
-`CONFIDENT_THRESHOLD` (`_accept_threshold`); below the bar minus
-`NEW_SPEAKER_MARGIN` it starts a new speaker. Between the two it returns
-`UNCERTAIN` ("?") — genuinely ambiguous — and is absorbed into no centroid.
-Rationale: on one laptop mic, distinct voices measure at 0.74–0.90 cosine
-(same-speaker and cross-speaker ranges overlap), and the same second voice
-measures 0.76–0.79 vs the primary voice in one session but 0.84 in another —
-so any FIXED threshold is arbitrary and silently absorbing marginal segments
-mislabeled the second voice as `self` and drifted the centroid toward the
-blended voice (self-reinforcing). The relative bar adapts per session; "?"
-is the honest label. Gray-zone segments that later form a tight
-self-consistent cluster (`PENDING_TIGHTNESS`, >= `MIN_PENDING_SEGMENTS`,
-stray outliers dropped greedily) are promoted to a named speaker — a
-genuinely distinct-but-close voice still becomes `other`. Promotion is
-refused while the cluster's mean per-segment similarity to an existing
-speaker clears that speaker's own acceptance bar — a new voice must be
-clearly farther from a speaker than that speaker's own members typically are,
-otherwise the speaker's own variance would be mislabeled as a new voice.
-
-Model pick (Phase 3 speaker-ID probe, 2026-08-24): `wespeaker_en_voxceleb_resnet34`
-(en, VoxCeleb) — top-1 100% / EER 1.6% @ threshold 0.74 on a LibriSpeech
-dev-clean subset; CAM++ dropped (EER 39%, poor discrimination on the same
-data). Full record: `_archive/benchmark_speaker.md`. Caveat: LibriSpeech is
-clean studio audio — real-meeting accuracy will be lower; the constants are
-starting points (0.15 new-speaker margin / 0.84 floor / 0.05 acceptance delta
-/ 0.85 cluster tightness, calibrated on recorded listen sessions), tune if
-one speaker fragments into several or the second voice is mislabeled.
+WeSpeaker ``wespeaker_en_voxceleb_resnet34`` (en, VoxCeleb; probe top-1 100% /
+EER 1.6% @0.74 on LibriSpeech dev-clean; CAM++ dropped @39% EER;
+record: ``_archive/benchmark_speaker.md``). No enrollment: first voice
+``self``, second ``other`` (auto-expanding, capped ``MAX_SPEAKERS=2``).
+Relative acceptance (not fixed cosine): tag if similarity within
+``CONFIDENCE_DELTA`` (0.05) of cluster mean sim floored at
+``CONFIDENT_THRESHOLD`` (0.84), ``EARLY_CONFIDENT_THRESHOLD`` (0.89) until
+count≥3; new speaker below bar minus ``NEW_SPEAKER_MARGIN`` (0.15); between
+→ ``UNCERTAIN`` "?" buffered and promoted when tight cluster (≥3, mean
+pairwise ≥0.85, min ≥0.80) and far from existing speakers. kNN scored by MAX
+cosine to ``KNN_WINDOW`` (6) recents, not centroid. See PLAN.md for full
+semantics and caveats.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import shutil
-import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
-from interpreter import DATA_DIR
+from interpreter import SPEAKER_MODELS_DIR
+from interpreter.common import ensure_onnxruntime
 
-MODELS_DIR = DATA_DIR / "benchmark" / "speaker" / "models"
-EN_MODEL = MODELS_DIR / "wespeaker_en_voxceleb_resnet34.onnx"
+EN_MODEL = SPEAKER_MODELS_DIR / "wespeaker_en_voxceleb_resnet34.onnx"
 
 _MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
@@ -153,46 +125,8 @@ class _Speaker:
 
 
 def _ensure_onnxruntime_runtime() -> None:
-    """Self-heal sherpa-onnx's onnxruntime dlopen on both platforms:
-
-    - macOS: sherpa wheels don't bundle onnxruntime — copy the dylibs into the
-      sherpa package's lib dir (the first @rpath search location). dyld reads
-      DYLD_* at exec time, so a runtime env tweak can't fix this.
-    - Linux: sherpa dlopens `libonnxruntime.so`; the PyPI wheel ships only the
-      versioned soname — symlink it and put it on the loader path.
-    """
-    if sys.platform == "darwin":
-        try:
-            import onnxruntime
-
-            spec = importlib.util.find_spec("sherpa_onnx")
-            if spec is None or not spec.submodule_search_locations:
-                return
-            sherpa_lib = Path(spec.submodule_search_locations[0]) / "lib"
-            sherpa_lib.mkdir(parents=True, exist_ok=True)
-            capi = Path(onnxruntime.__file__).parent / "capi"
-            for src in capi.glob("libonnxruntime*.dylib"):
-                dest = sherpa_lib / src.name
-                if not dest.exists():
-                    shutil.copy2(src, dest)
-        except Exception:  # noqa: S110, BLE001 - best-effort fix; surface the real import error
-            pass
-        return
-    try:
-        import onnxruntime
-
-        capi = Path(onnxruntime.__file__).parent / "capi"
-        if not capi.exists():
-            return
-        plain = capi / "libonnxruntime.so"
-        if not plain.exists():
-            libs = sorted(capi.glob("libonnxruntime.so.*"))
-            if libs:
-                plain.symlink_to(libs[-1].name)
-        path = os.environ.get("LD_LIBRARY_PATH", "")
-        os.environ["LD_LIBRARY_PATH"] = f"{capi}{os.pathsep}{path}"
-    except Exception:  # noqa: S110, BLE001 - best-effort env fix for sherpa-onnx
-        pass
+    """Deprecated alias for :func:`interpreter.common.ensure_onnxruntime`."""
+    ensure_onnxruntime()
 
 
 def _ensure_en_model() -> Path:
@@ -200,7 +134,7 @@ def _ensure_en_model() -> Path:
         return EN_MODEL
     import urllib.request
 
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    SPEAKER_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     print("Downloading speaker-ID model (WeSpeaker en, 25 MB)...", flush=True)
     urllib.request.urlretrieve(_MODEL_URL, EN_MODEL)
     return EN_MODEL
@@ -224,7 +158,7 @@ class SpeakerAssigner:
     """
 
     def __init__(self, model_path: Path | str = EN_MODEL) -> None:
-        _ensure_onnxruntime_runtime()
+        ensure_onnxruntime()
         _ensure_en_model()
         import sherpa_onnx  # heavy — import only when speaker ID is enabled
 

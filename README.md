@@ -67,7 +67,7 @@ The launcher has the repo path baked in at build time; re-run
 (e.g. `/Applications`). Don't copy the bundle or `.venv` to another Mac —
 venvs are machine-specific; rebuild there with the steps above.
 
-The first run downloads the STT model weights (sherpa-onnx int8: `sensevoicesmall` for mixed, `parakeet-unified-en-0.6b` for en-only) and the en→zh translation model `opus-mt-en-zh` anonymously from Hugging Face.
+The first run downloads model weights to `data/models/` (`transcribe/` → `sensevoicesmall`/`parakeet-unified-en-0.6b`, `translate/` → `opus-mt-en-zh`, `speaker/` → WeSpeaker) anonymously from Hugging Face.
 
 ## Roadmap
 

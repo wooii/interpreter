@@ -1,60 +1,19 @@
-"""Real-time speech-to-text with optional translation.
+"""Real-time speech-to-text with adaptive stability-window.
 
-Quick start (defaults: SenseVoice STT + opus-mt-en-zh translation):
-
-    from interpreter.transcribe import RealTimeTranscribe
-
-    rtt = RealTimeTranscribe(translate_to="Chinese")
-    rtt.run()                       # live mic; Ctrl+C to stop
-    rtt.evaluate()                  # WER/CER vs full-file reference (needs audio_file_path)
-
-Model selection (the CLI picks models internally per task — see __main__.py;
-the library still accepts explicit names):
-
-    RealTimeTranscribe(stt_model="sensevoicesmall")        # default; zh<->en code-switching
-    RealTimeTranscribe(stt_model="parakeet-unified-en-0.6b")  # en-only / listen (offline mode)
-
-    RealTimeTranscribe(translate_model="opus-mt-en-zh")    # default; dedicated NMT, en->zh
-    RealTimeTranscribe(translate_to=None)                  # no translation
-
-Record a session for later evaluation:
-
-    rtt = RealTimeTranscribe(audio_file_path="session.wav", translate_to=None)
-    rtt.run()                       # writes session.wav on stop
-    rtt.evaluate()                  # WER/CER of the live transcript vs offline re-transcribe
-
-Replay a file through the live pipeline (no mic — same VAD/segment/window
-engine, used by the benchmark sweep; 16 kHz mono):
-
-    rtt = RealTimeTranscribe(input_path="clip.wav", audio_file_path="out.wav",
-                             max_segment_duration=4.0, translate_to=None)
-    rtt.run()
-    rtt.evaluate()
-
-Any path is accepted (format inferred from the suffix); .flac is written as
-int16 PCM. The transcript is saved as a plain-text .txt next to the audio file.
-
-Standalone use (no mic): transcribe a 16 kHz mono file or array directly
-
-    from interpreter.transcribe import SpeechToText
-    from interpreter.translate import Translator
-
-    stt = SpeechToText("sensevoicesmall")       # or "parakeet-unified-en-0.6b"
-    text = stt.extract_text(stt.transcribe_file("clip.wav"))
-    print(Translator().translate(text))         # opus-mt-en-zh -> Chinese
-
-CLI: `uv run python -m interpreter listen|dictate` runs live dictation (see
-__main__.py). Model picks follow the Phase 1 conclusion (_archive/benchmark_transcribe.md);
-weights download anonymously from HF on first use.
+Product models (single source; see PLAN.md): ``parakeet-unified-en-0.6b``
+(en-only/offline, listen) and ``sensevoicesmall`` (mixed zh/en, dictate);
+translate ``opus-mt-en-zh``. CLI picks models internally
+(``python -m interpreter listen|dictate``); library accepts explicit names.
+Supports live mic (``RealTimeTranscribe``), replay (``input_path``) and
+standalone (``SpeechToText``/``Translator``). Weights under
+``data/models/`` via HF; full selection record in ``_archive/``.
 """
 
 from __future__ import annotations
 
 import collections
-import importlib.util
 import math
 import queue
-import shutil
 import sys
 import threading
 import time
@@ -69,20 +28,13 @@ import soundfile as sf
 import torch
 from jiwer import cer, wer
 
-from interpreter import DATA_DIR
+from interpreter import TRANSCRIBE_MODELS_DIR
+from interpreter.common import _contains_cjk, _is_cjk_char, ensure_onnxruntime
 from interpreter.speaker import UNCERTAIN, SpeakerAssigner
 from interpreter.translate import Translator
 
 STT_MODEL_EN_ONLY = "parakeet-unified-en-0.6b"
 STT_MODEL_MIXED = "sensevoicesmall"
-
-
-def _contains_cjk(text: str) -> bool:
-    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
-
-
-def _is_cjk_char(ch: str) -> bool:
-    return "\u4e00" <= ch <= "\u9fff"
 
 
 def _join_text_parts(parts, force_space=False) -> str:
@@ -252,8 +204,6 @@ def _normalize_sensevoice_case(text: str) -> str:
     return _sentence_case(text.lower())
 
 
-MODELS_DIR = DATA_DIR / "benchmark" / "transcribe" / "models"
-
 MODEL_SPECS: dict[str, dict] = {
     "parakeet-unified-en-0.6b": {
         "repo": "csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
@@ -280,7 +230,7 @@ MODEL_SPECS: dict[str, dict] = {
 
 def _download_model_files(name: str) -> None:
     spec = MODEL_SPECS[name]
-    dest = MODELS_DIR / name
+    dest = TRANSCRIBE_MODELS_DIR / name
     if (dest / ".complete").exists():
         return
     dest.mkdir(parents=True, exist_ok=True)
@@ -292,28 +242,8 @@ def _download_model_files(name: str) -> None:
 
 
 def _ensure_onnxruntime_dylib() -> None:
-    """macOS only: sherpa-onnx wheels don't bundle onnxruntime — dlopen of
-    `@rpath/libonnxruntime.<ver>.dylib` fails (_archive/benchmark_transcribe.md). Copy the
-    dylibs from the installed onnxruntime package into the sherpa package's
-    lib dir — the first @rpath search location. dyld reads DYLD_* at exec
-    time, so a runtime env tweak can't fix this."""
-    if sys.platform != "darwin":
-        return
-    try:
-        import onnxruntime
-
-        spec = importlib.util.find_spec("sherpa_onnx")
-        if spec is None or not spec.submodule_search_locations:
-            return
-        sherpa_lib = Path(spec.submodule_search_locations[0]) / "lib"
-        sherpa_lib.mkdir(parents=True, exist_ok=True)
-        capi = Path(onnxruntime.__file__).parent / "capi"
-        for src in capi.glob("libonnxruntime*.dylib"):
-            dest = sherpa_lib / src.name
-            if not dest.exists():
-                shutil.copy2(src, dest)
-    except Exception:  # noqa: S110, BLE001 - best-effort fix; surface the real import error
-        pass
+    """Deprecated alias for :func:`interpreter.common.ensure_onnxruntime`."""
+    ensure_onnxruntime()
 
 
 def _load_silero_vad():
@@ -425,11 +355,11 @@ class SherpaStt:
         spec = MODEL_SPECS[model_name]
         self.model_name = model_name
         _download_model_files(model_name)
-        _ensure_onnxruntime_dylib()
+        ensure_onnxruntime()
         import sherpa_onnx
 
         kwargs: dict[str, object] = {
-            key: str(MODELS_DIR / model_name / rel)
+            key: str(TRANSCRIBE_MODELS_DIR / model_name / rel)
             for key, rel in spec["files"].items()
         }
         kwargs.update(spec.get("kwargs", {}))

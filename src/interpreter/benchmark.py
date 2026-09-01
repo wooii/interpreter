@@ -1,43 +1,10 @@
-"""
-Local STT benchmark harness — Phase 1 model selection.
+"""Benchmark harness for STT / translate / speaker (Phases 1/3).
 
-Benchmarks local STT models against gold-reference transcripts:
-- WER / CER (jiwer), overall and per language block (code-switching WER)
-- Wall-clock decode time and RTF (decode time / audio duration)
-- Peak RSS
-- Segments (start/end/text) per sample, when the model exposes them
-
-Usage:
-  uv run python -m interpreter benchmark --list                  # stt models + samples
-  uv run python -m interpreter benchmark                         # all stt models
-  uv run python -m interpreter benchmark parakeet-unified-en-0.6b sensevoicesmall
-  uv run python -m interpreter benchmark --samples sample_a1
-  uv run python -m interpreter benchmark --task translate        # all en->zh models
-  uv run python -m interpreter benchmark --task translate opus-mt-en-zh
-  uv run python -m interpreter benchmark --task speaker          # speaker-ID probe (Phase 3)
-  uv run python -m interpreter benchmark --record mode_b_1.wav 30  # host only (mic)
-
-Default runs load one model per subprocess (load -> benchmark -> write JSON
--> exit, memory fully released -> next model). A model killed by OOM
-(exit -9 / 137) is recorded as "excluded: OOM" and the run continues — this is the
-container's memory budget acting as the model filter: anything that does not
-fit is not considered (8 GB since the 2026-08-24 upgrade; was 4 GB). Use
---in-process to disable isolation (debugging).
-
-RTF (Real-Time Factor) = decode wall time / audio duration; < 1.0 means the
-model processes faster than real time. The container numbers are relative
-(roughly 13-18x slower than the M4 host); the ranking is what matters here.
-
-Results are written to data/benchmark/transcribe/results/<model>.json (STT) and
-data/benchmark/translate/results/<model>.json (en->zh); a summary table
-is printed to stdout.
-
-Environment notes:
-- Linux aarch64 container: the sherpa-onnx adapter auto-plumbs the
-  onnxruntime lib path (see _ensure_onnxruntime_lib) — no env fiddling.
-- sherpa-onnx is pinned to 1.13.0 + onnxruntime 1.24.4: newer sherpa
-  wheels link a VERS_1.27.1 symbol that no PyPI onnxruntime exports
-  (see PLAN.md Phase 1 deps item).
+Measures WER/CER (+ per-block), RTF, peak RSS, segments. Usage:
+  ``python -m interpreter benchmark --list`` / ``benchmark [models] [--samples ...] [--task stt|translate|speaker]``
+Default: one subprocess per model (OOM → "excluded: OOM", 8 GB budget);
+``--in-process`` for debugging. Results: ``data/benchmark/{transcribe,translate,speaker}/results/*.json``.
+Env: sherpa auto-plumbs onnxruntime via :mod:`interpreter.common` (pinned 1.13.0/1.24.4).
 """
 
 from __future__ import annotations
@@ -50,22 +17,25 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import soundfile as sf
 
-from interpreter import DATA_DIR
+from interpreter import (
+    DATA_DIR,
+    SPEAKER_MODELS_DIR,
+    TRANSCRIBE_MODELS_DIR,
+)
+from interpreter.common import ensure_onnxruntime, onnxruntime_capi_dir
+from interpreter.transcribe import MODEL_SPECS as _TRANSCRIBE_SPECS
 
 BENCH_DIR = DATA_DIR / "benchmark"
 TRANSCRIBE_DIR = BENCH_DIR / "transcribe"
 TRANSLATE_DIR = BENCH_DIR / "translate"
-MODELS_DIR = TRANSCRIBE_DIR / "models"
 TRANSCRIBE_RESULTS_DIR = TRANSCRIBE_DIR / "results"
 TRANSLATE_RESULTS_DIR = TRANSLATE_DIR / "results"
 TRANSCRIBE_MANIFEST = TRANSCRIBE_DIR / "manifest.json"
 TRANSLATE_MANIFEST = TRANSLATE_DIR / "manifest.json"
 SPEAKER_DIR = BENCH_DIR / "speaker"
-SPEAKER_MODELS_DIR = SPEAKER_DIR / "models"
 SPEAKER_SAMPLES_DIR = SPEAKER_DIR / "samples"
 SPEAKER_RESULTS_DIR = SPEAKER_DIR / "results"
 SPEAKER_MANIFEST = SPEAKER_DIR / "manifest.json"
@@ -113,7 +83,10 @@ def _wer_cer(ref: str, hyp: str) -> tuple[float, float]:
 
 
 def _has_cjk(text: str) -> bool:
-    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+    """Deprecated alias for :func:`interpreter.common._contains_cjk`."""
+    from interpreter.common import _contains_cjk
+
+    return _contains_cjk(text)
 
 
 def _block_wer(ref: str, hyp: str, blocks: list[dict]) -> list[dict]:
@@ -231,33 +204,13 @@ class Adapter:
 
 
 def _onnxruntime_capi_dir() -> Path | None:
-    """Path to the onnxruntime capi dir (Linux), or None if unavailable."""
-    if sys.platform != "linux":
-        return None
-    try:
-        import onnxruntime
-    except Exception:  # noqa: BLE001 - missing dep
-        return None
-    capi = Path(onnxruntime.__file__).parent / "capi"
-    return capi if capi.exists() else None
+    """Deprecated alias for :func:`interpreter.common.onnxruntime_capi_dir`."""
+    return onnxruntime_capi_dir()
 
 
 def _ensure_onnxruntime_lib() -> None:
-    """Linux only: sherpa-onnx dlopens `libonnxruntime.so`; the PyPI wheel
-    ships only the versioned soname. Symlink it and put it on the loader path."""
-    capi = _onnxruntime_capi_dir()
-    if capi is None:
-        return
-    try:
-        plain = capi / "libonnxruntime.so"
-        if not plain.exists():
-            libs = sorted(capi.glob("libonnxruntime.so.*"))
-            if libs:
-                plain.symlink_to(libs[-1].name)
-        path = os.environ.get("LD_LIBRARY_PATH", "")
-        os.environ["LD_LIBRARY_PATH"] = f"{capi}{os.pathsep}{path}"
-    except Exception:  # noqa: S110, BLE001 - best-effort env fix for sherpa-onnx
-        pass
+    """Deprecated alias for :func:`interpreter.common.ensure_onnxruntime`."""
+    ensure_onnxruntime()
 
 
 class _Sherpa(Adapter):
@@ -269,13 +222,13 @@ class _Sherpa(Adapter):
     ) -> None:
         super().__init__()
         self.name = name
-        _ensure_onnxruntime_lib()
+        ensure_onnxruntime()
         import sherpa_onnx
 
         t0 = time.perf_counter()
         kwargs = dict(factory_kwargs or {})
         for key, rel in files.items():
-            kwargs[key] = str(MODELS_DIR / self.name / rel)
+            kwargs[key] = str(TRANSCRIBE_MODELS_DIR / self.name / rel)
         kwargs["num_threads"] = 4
         self.recognizer = getattr(sherpa_onnx.OfflineRecognizer, factory)(**kwargs)
         self.load_s = time.perf_counter() - t0
@@ -320,17 +273,22 @@ class _SherpaSpec:
     factory_kwargs: dict | None = None
 
 
+def _spec_from_transcribe(name: str, tier: str, weight_note: str) -> _SherpaSpec:
+    """Build a bench spec from the product registry (single source of truth)."""
+    s = _TRANSCRIBE_SPECS[name]
+    return _SherpaSpec(
+        repo=s["repo"],
+        files=dict(s["files"]),
+        factory=s["factory"],
+        factory_kwargs=dict(s["kwargs"]) if s.get("kwargs") else None,
+        tier=tier,
+        weight_note=weight_note,
+    )
+
+
 _MODEL_FILES: dict[str, _SherpaSpec] = {
-    "parakeet-unified-en-0.6b": _SherpaSpec(
-        repo="csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
-        files={
-            "encoder": "encoder.int8.onnx",
-            "decoder": "decoder.int8.onnx",
-            "joiner": "joiner.int8.onnx",
-            "tokens": "tokens.txt",
-        },
-        factory="from_transducer",
-        factory_kwargs={"model_type": "nemo_transducer"},
+    "parakeet-unified-en-0.6b": _spec_from_transcribe(
+        "parakeet-unified-en-0.6b",
         tier="en-only",
         weight_note="int8 NeMo transducer (offline mode of the unified model)",
     ),
@@ -357,14 +315,8 @@ _MODEL_FILES: dict[str, _SherpaSpec] = {
         tier="multilingual",
         weight_note="Qwen3-0.6B-based LLM ASR, int8",
     ),
-    "sensevoicesmall": _SherpaSpec(
-        repo="csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
-        files={
-            "model": "model.int8.onnx",
-            "tokens": "tokens.txt",
-        },
-        factory="from_sense_voice",
-        factory_kwargs={"use_itn": True},
+    "sensevoicesmall": _spec_from_transcribe(
+        "sensevoicesmall",
         tier="multilingual",
         weight_note="non-streaming, fastest zh/en",
     ),
@@ -384,8 +336,13 @@ _MODEL_FILES: dict[str, _SherpaSpec] = {
 
 
 def _download_model_files(name: str) -> None:
+    # Shared HF models use the product downloader (single source of truth).
+    if name in _TRANSCRIBE_SPECS:
+        from interpreter.transcribe import _download_model_files as _transcribe_download
+
+        return _transcribe_download(name)
     spec = _MODEL_FILES[name]
-    dest = MODELS_DIR / name
+    dest = TRANSCRIBE_MODELS_DIR / name
     if (dest / ".complete").exists():
         return
     dest.mkdir(parents=True, exist_ok=True)
@@ -606,7 +563,7 @@ def _run_isolated(name: str, task: str, sample_ids: list[str]) -> tuple[dict, in
     if task == "stt":
         cmd += ["--samples", *sample_ids]
     env = None
-    capi = _onnxruntime_capi_dir()
+    capi = onnxruntime_capi_dir()
     if capi is not None:
         env = dict(os.environ)
         env["LD_LIBRARY_PATH"] = f"{capi}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
@@ -639,38 +596,39 @@ def load_translate_manifest() -> list[dict]:
 
 
 class _HfSeq2SeqTranslator:
-    """Dedicated NMT via transformers (opus-mt / M2M100)."""
+    """Deprecated wrapper — delegates to :class:`interpreter.translate.Translator`.
+
+    Kept for backward compat; ``forced_bos`` (M2M100) is ignored (only
+    opus-mt-en-zh remains).
+    """
 
     def __init__(self, model_id: str, forced_bos: str | None = None) -> None:
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        from interpreter.translate import _HF_IDS, Translator
 
-        t0 = time.perf_counter()
-        self.tokenizer: Any = AutoTokenizer.from_pretrained(model_id)
-        self.model: Any = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.forced_bos = (
-            self.tokenizer.lang_code_to_id[forced_bos] if forced_bos else None
-        )
-        self.load_s = time.perf_counter() - t0
+        rev = {v: k for k, v in _HF_IDS.items()}
+        short = rev.get(model_id, model_id.split("/")[-1])
+        t = Translator(model=short)
+        self.tokenizer = t._nmt_tokenizer  # type: ignore[attr-defined]
+        self.model = t._nmt_model  # type: ignore[attr-defined]
+        self.forced_bos = None
+        self.load_s: float = getattr(t, "load_s", 0.0)
+        self._translator = t
 
     def translate(self, src: str) -> str:
-        inputs = self.tokenizer(src, return_tensors="pt", truncation=True)
-        kwargs = {"forced_bos_token_id": self.forced_bos} if self.forced_bos else {}
-        out = self.model.generate(**inputs, max_length=256, **kwargs)
-        return self.tokenizer.decode(out[0], skip_special_tokens=True).strip()
+        return self._translator.translate(src)
 
 
 def make_translate_adapter(name: str):
     if name == "opus-mt-en-zh":
-        return _HfSeq2SeqTranslator("Helsinki-NLP/opus-mt-en-zh")
-    if name == "m2m100-418m":
-        return _HfSeq2SeqTranslator("facebook/m2m100_418M", forced_bos="zh")
+        from interpreter.translate import Translator
+
+        return Translator(model=name)
     raise ValueError(f"unknown translate model: {name}")
 
 
 def translate_models() -> list[str]:
     return [
         "opus-mt-en-zh",
-        "m2m100-418m",
     ]
 
 
@@ -875,7 +833,7 @@ def run_speaker_model(name: str, manifest: dict) -> dict:
     spec = next(s for s in SPEAKER_MODEL_SPECS if s["name"] == name)
     model_path = _ensure_speaker_model(spec)
     print(f"\n=== {name} ({spec['lang']}) — {spec['note']} ===")
-    _ensure_onnxruntime_lib()
+    ensure_onnxruntime()
 
     import sherpa_onnx
 
