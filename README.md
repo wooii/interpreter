@@ -71,7 +71,7 @@ The first run downloads model weights to `data/models/` (`transcribe/` → `sens
 
 ## Roadmap
 
-See `PLAN.md` for the modernization plan.
+See `PLAN.md` for the modernization plan and `docs/` for the benchmark records.
 
 ## License
 MIT

@@ -17,7 +17,7 @@ Facts that hold *now*. Issues/gotchas live in the phase item that resolves them.
 
 **Startup**: VAD / Translator / STT load **concurrently** (`RealTimeTranscribe._load_models` — independent model stacks, startup waits for the slowest not the sum; worker failures re-raise in the main thread). Silero loads via **direct `torch.jit.load` of the cached `silero_vad.pt`** (skips `torch.hub`'s repo clone/import — also avoids the torchaudio import); `Translator` loads from `data/models/translate/<name>/` (`TRANSLATE_MODELS_DIR`) via `snapshot_download` (`.complete` marker) with a `local_files_only` fast path then download then HF-cache fallback, and exposes `load_s`; CLI prints a loading status line.
 
-**Model verdicts** (60-sample container pass; **full records: `_archive/benchmark_transcribe.md`, `_archive/benchmark_translate.md`, `_archive/benchmark_speaker.md`**):
+**Model verdicts** (60-sample container pass; **full records: `docs/benchmark_transcribe.md`, `docs/benchmark_translate.md`, `docs/benchmark_speaker.md`**):
 
 - listen / en-only → **Parakeet Unified en 0.6B offline mode** (sherpa-onnx int8, since 2026-08-25); dictate / multilingual → **SenseVoiceSmall** (only true zh↔en code-switcher); translate → **opus-mt-en-zh** (only backend; LLM quality mode dropped).
 - whisper.cpp / Moonshine **dropped from the product**; the whispercpp baseline is superseded (pre-drop harness at commit `59e91d7`).
@@ -39,7 +39,7 @@ Facts that hold *now*. Issues/gotchas live in the phase item that resolves them.
 **Environment**:
 
 - Container runs: `UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync <cmd>`; never plain `uv sync`/`uv run`. Dep pins: sherpa-onnx 1.13.0 + onnxruntime 1.24.4; **torch + torchaudio from the `pytorch-cpu` index on Linux** (PyPI wheels are CUDA and fail to dlopen on the container's CPU torch). **`sentencepiece` is a direct dep** (opus-mt's Marian tokenizer needs it). **matplotlib** is a direct dep (audio.py plotting; also transitive via noisereduce). **PySide6 6.11.2** (GUI; container synced — **host `uv sync` pending**). Container Qt offscreen testing needs system libs: `libegl1 libgl1 libxkbcommon0 libfontconfig1` (installed in the container). sherpa needs `libonnxruntime.so` on the loader path (self-healed via `interpreter.common.ensure_onnxruntime` in engine/harness; replaces the former per-module `_ensure_onnxruntime_*` copies). Container audio: libportaudio2 + pulseaudio for headless `sounddevice`; macOS: `interpreter.common.ensure_onnxruntime` self-heals the missing bundled onnxruntime (was `_ensure_onnxruntime_dylib`).
-- Bench assets under `data/benchmark/` (gitignored via `/data/`), grouped by task; run records in `_archive/`. **Speaker-ID assets under `data/benchmark/speaker/`**: LibriSpeech dev-clean subset (14 speakers, CC-BY-4.0) + results; en model under `data/models/speaker/`; record in `_archive/benchmark_speaker.md`.
+- Bench assets under `data/benchmark/` (gitignored via `/data/`), grouped by task; run records in `docs/`. **Speaker-ID assets under `data/benchmark/speaker/`**: LibriSpeech dev-clean subset (14 speakers, CC-BY-4.0) + results; en model under `data/models/speaker/`; record in `docs/benchmark_speaker.md`.
 - **Layout / deps**: `src-layout` `uv_build` backend, Python ≥3.14 (`pyproject.toml:7` `requires-python`), `src/interpreter/` (`__init__.py` `DATA_DIR`/`MODELS_DIR`/`TRANSCRIBE_MODELS_DIR`/`TRANSLATE_MODELS_DIR`/`SPEAKER_MODELS_DIR` + `common.py` + `transcribe.py` + `translate.py` + `speaker.py` + `audio.py` + `app.py` + `benchmark.py` + `__main__.py`). Dependencies `pyproject.toml:10` (`huggingface-hub`, `jiwer`, `matplotlib`, `noisereduce`, `numpy`, `onnxruntime==1.24.4`, `pyside6`, `sacrebleu`, `sentencepiece`, `sherpa-onnx==1.13.0`, `sounddevice`, `soundfile`, `torch`, `torchaudio`, `transformers`). `benchmark.py` reuses product registries (STT single-source `transcribe.MODEL_SPECS`, translate via `translate.Translator`); speaker benchmark en-only.
 
 
@@ -47,7 +47,7 @@ Facts that hold *now*. Issues/gotchas live in the phase item that resolves them.
 
 ### Phase 1 — Model benchmark (model selection)
 
-Status: **COMPLETE (2026-08-24)** — 60 samples / 15 models; listen → Parakeet TDT 0.6B v2, dictate → SenseVoiceSmall, translate → opus-mt-en-zh; whispercpp baseline superseded. Record: `_archive/benchmark_transcribe.md`.
+Status: **COMPLETE (2026-08-24)** — 60 samples / 15 models; listen → Parakeet TDT 0.6B v2, dictate → SenseVoiceSmall, translate → opus-mt-en-zh; whispercpp baseline superseded. Record: `docs/benchmark_transcribe.md`.
 
 ### Phase 2 — Architecture restructure
 
@@ -55,7 +55,7 @@ Status: **COMPLETE (2026-08-24)** — lean layout (`transcribe.py` + `translate.
 
 ### Phase 3 — Future features (Python, product-complete)
 
-Status: **COMPLETE (2026-08-25)** — speaker ID (probe + listen auto-assign + `[?]` uncertainty band + gray-zone promotion + MAX_SPEAKERS=2; record: `_archive/benchmark_speaker.md`); translate-others gating **dropped** (speculative, and "self" = first voice is the least-trustworthy part of speaker assignment — gating could silently suppress translation the user wants); **streaming probe resolved** — keep the windowed engine on the container, **listen's model switched to Unified offline** (beats TDT at every cap: 0.114 vs 0.163 @4 s human-ref WER; full-set en WER 0.126 vs 0.148); true streaming (0.096 @560 ms) is not real-time on the container (RTF 1.96) — a faster-host/Phase 4 option.
+Status: **COMPLETE (2026-08-25)** — speaker ID (probe + listen auto-assign + `[?]` uncertainty band + gray-zone promotion + MAX_SPEAKERS=2; record: `docs/benchmark_speaker.md`); translate-others gating **dropped** (speculative, and "self" = first voice is the least-trustworthy part of speaker assignment — gating could silently suppress translation the user wants); **streaming probe resolved** — keep the windowed engine on the container, **listen's model switched to Unified offline** (beats TDT at every cap: 0.114 vs 0.163 @4 s human-ref WER; full-set en WER 0.126 vs 0.148); true streaming (0.096 @560 ms) is not real-time on the container (RTF 1.96) — a faster-host/Phase 4 option.
 
 ### Phase 4 — App form + session editing (local desktop GUI)
 

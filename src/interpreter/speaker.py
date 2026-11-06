@@ -2,7 +2,7 @@
 
 WeSpeaker ``wespeaker_en_voxceleb_resnet34`` (en, VoxCeleb; probe top-1 100% /
 EER 1.6% @0.74 on LibriSpeech dev-clean; CAM++ dropped @39% EER;
-record: ``_archive/benchmark_speaker.md``). No enrollment: first voice
+record: ``docs/benchmark_speaker.md``). No enrollment: first voice
 ``self``, second ``other`` (auto-expanding, capped ``MAX_SPEAKERS=2``).
 Relative acceptance (not fixed cosine): tag if similarity within
 ``CONFIDENCE_DELTA`` (0.05) of cluster mean sim floored at

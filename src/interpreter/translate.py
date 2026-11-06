@@ -1,9 +1,9 @@
 """en->zh translation — opus-mt-en-zh (Helsinki-NLP seq2seq), the only backend.
 
 Dedicated NMT: deterministic, best BLEU on the benchmark corpus (33.59,
-_archive/benchmark_translate.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
+docs/benchmark_translate.md), ~1.2 s/sentence; single pair en->zh. The qwen3.5 LLM
 quality mode was dropped 2026-08-24 — live dictation showed hallucinated
-content and a meaning-reversed error (PLAN.md, _archive/benchmark_translate.md).
+content and a meaning-reversed error (PLAN.md, docs/benchmark_translate.md).
 
 Weights are stored under data/models/translate/<name>/ (e.g. opus-mt-en-zh)
 via huggingface_hub snapshot_download with local_dir. This matches the STT

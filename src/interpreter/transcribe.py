@@ -6,7 +6,7 @@ translate ``opus-mt-en-zh``. CLI picks models internally
 (``python -m interpreter listen|dictate``); library accepts explicit names.
 Supports live mic (``RealTimeTranscribe``), replay (``input_path``) and
 standalone (``SpeechToText``/``Translator``). Weights under
-``data/models/`` via HF; full selection record in ``_archive/``.
+``data/models/`` via HF; full selection record in ``docs/``.
 """
 
 from __future__ import annotations
@@ -394,9 +394,9 @@ def process_audio_segment(full_segment, sample_rate):
 
 
 class SpeechToText:
-    """STT backend dispatch — Phase 1 model-selection winners (_archive/benchmark_transcribe.md).
+    """STT backend dispatch — Phase 1 model-selection winners (docs/benchmark_transcribe.md).
     Sherpa-onnx int8 only since 2026-08-24 (whisper.cpp and Moonshine both
-    dropped — see _archive/benchmark_transcribe.md for the reasons).
+    dropped — see docs/benchmark_transcribe.md for the reasons).
 
     model_name:
       - "sensevoicesmall"              product default (sherpa int8; dictate/multilingual winner)
@@ -406,7 +406,7 @@ class SpeechToText:
     Per-word confidence coloring: the sherpa transducer (parakeet) exposes
     per-token log-probs, grouped into word probs in _word_probs_from_result.
     SenseVoice exposes no per-token scores in sherpa-onnx 1.13.0 — its
-    output is uncolored (uniform), a known limitation (_archive/benchmark_transcribe.md).
+    output is uncolored (uniform), a known limitation (docs/benchmark_transcribe.md).
     """
 
     def __init__(self, model_name):
@@ -1391,7 +1391,7 @@ class RealTimeTranscribe:
         metrics = {"CER": cer_error}
         # WER only makes sense on whitespace-segmented text (English). On
         # unsegmented Chinese/mixed it compares chars vs segments and explodes
-        # (_archive/benchmark_transcribe.md scores zh with CER for this reason), so skip it.
+        # (docs/benchmark_transcribe.md scores zh with CER for this reason), so skip it.
         if not (
             _contains_cjk(self.reference_transcript)
             or _contains_cjk(self.realtime_transcript)
