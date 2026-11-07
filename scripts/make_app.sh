@@ -46,6 +46,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>Interpreter.icns</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Interpreter needs microphone access to transcribe speech.</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
 </dict>
