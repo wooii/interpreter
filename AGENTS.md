@@ -46,4 +46,3 @@ Long benchmark/model runs can hang or fail silently. Interrupt and diagnose like
 - **On interruption (yours or the human's): diagnose first** — tail the log, find the *first* failure, build a minimal repro, fix it, then resume only the remaining work (e.g. the un-run models), never re-run everything.
 - **On failure, check the result artifacts**: an all-FAILED or suspiciously small results file means the run "succeeded" while failing — inspect before trusting it.
 - **Stop early on systemic patterns**: if every sample of the first model section fails, don't let the rest of the run continue — kill, fix, restart.
-

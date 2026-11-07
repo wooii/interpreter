@@ -23,6 +23,7 @@ One pipeline (mic → VAD → adaptive-window STT → optional translation), two
 
 ## Requirements
 
+- macOS 12+ (for the desktop app and `.app` bundle)
 - [uv](https://docs.astral.sh/uv/)
 - A working microphone
 
@@ -38,8 +39,7 @@ AI agents run in a Linux container with a separate `.venv-container` — see `AG
 
 ## Running
 
-Run from the project root (where `pyproject.toml` is). Models are picked
-internally per task — no model names to configure.
+Run from the project root (where `pyproject.toml` is). Models are picked internally per task — no model names to configure.
 
 ```bash
 uv run python -m interpreter listen                # transcribe English + translate to Chinese (translate on, speaker ID on)
@@ -50,24 +50,28 @@ uv run python -m interpreter app                   # local desktop GUI (native w
 uv run python -m interpreter benchmark --list      # benchmark harness
 ```
 
-**macOS app bundle (double-click to launch, with app icon)** — needs
-`iconutil` (built into macOS):
+`uv run python -m interpreter app` opens the GUI directly from source — no bundle build needed. The `.app` below is optional; it only adds double-click launch and the app icon.
+
+**macOS app bundle (double-click to launch, with app icon)** — needs macOS 12+ and `iconutil` (built into macOS):
 
 ```bash
-git clone <your remote> <repo>                    # or copy the repo over
-cd <repo>
-curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv missing
+git clone https://github.com/wooii/interpreter.git
+cd interpreter
+curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if uv is already installed
+source "$HOME/.local/bin/env"                     # curl installer only; or open a new terminal
 uv sync                                           # native macOS venv
-./scripts/make_app.sh                             # builds dist/Interpreter.app
-open dist/Interpreter.app                         # or double-click it in Finder
+bash scripts/make_app.sh                          # builds dist/Interpreter.app
 ```
 
-The launcher has the repo path baked in at build time; re-run
-`make_app.sh` if the repo moves. `Interpreter.app` may be copied anywhere
-(e.g. `/Applications`). Don't copy the bundle or `.venv` to another Mac —
-venvs are machine-specific; rebuild there with the steps above.
+**After building**
 
-The first run downloads model weights to `data/models/` (`transcribe/` → `sensevoicesmall`/`parakeet-unified-en-0.6b`, `translate/` → `opus-mt-en-zh`, `speaker/` → WeSpeaker) anonymously from Hugging Face.
+1. Launch it with `open dist/Interpreter.app`, or double-click it in Finder.
+2. On first use, allow microphone access when macOS asks.
+3. Choose Listen or Dictate and press Start. Model weights download on first use (~2.3 GB total), not during `uv sync`; the status line shows loading.
+4. Optional: drag `dist/Interpreter.app` to `/Applications`. It still runs this repo's `.venv`; do not copy the bundle or `.venv` to another Mac.
+5. If a Finder launch fails, check `~/Library/Logs/Interpreter.log`.
+
+The bundle is a thin launcher for this repo's `.venv`: code changes are picked up without rebuilding — rerun `make_app.sh` only after moving the repo or changing the icon. The launcher has the repo path baked in at build time (with a walk-up fallback if the repo moved).
 
 ## Benchmark
 
