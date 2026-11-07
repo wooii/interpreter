@@ -57,11 +57,13 @@ uv run python -m interpreter benchmark --list      # benchmark harness
 ```bash
 git clone https://github.com/wooii/interpreter.git
 cd interpreter
-curl -LsSf https://astral.sh/uv/install.sh | sh   # skip if uv is already installed
-source "$HOME/.local/bin/env"                     # curl installer only; or open a new terminal
-uv sync                                           # native macOS venv
-bash scripts/make_app.sh                          # builds dist/Interpreter.app
+curl -LsSf https://astral.sh/uv/install.sh | sh
+command -v uv >/dev/null || export PATH="$HOME/.local/bin:$PATH"
+uv sync
+bash scripts/make_app.sh
 ```
+
+If `uv` is not found in the current shell after the installer, the `command -v uv || export PATH=...` line adds `~/.local/bin`. `uv sync` creates the native macOS venv; `make_app.sh` builds `dist/Interpreter.app`.
 
 **After building**
 
