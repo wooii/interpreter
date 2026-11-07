@@ -1129,7 +1129,7 @@ class MainWindow(QMainWindow):
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
         self.status_lbl = QLabel("idle")
-        self.status_lbl.setStyleSheet("color: #b8c4d9;")
+        self.status_lbl.setStyleSheet("color: palette(window-text);")
         self.status_lbl.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
@@ -1162,12 +1162,18 @@ class MainWindow(QMainWindow):
         header.addWidget(self.status_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
 
         self.progress_label = QLabel("")
-        self.progress_label.setStyleSheet("color: #334155; font-size: 10pt;")
+        self.progress_label.setStyleSheet("color: palette(window-text);")
         self.progress_eta = QLabel("")
-        self.progress_eta.setStyleSheet("color: #64748b; font-size: 9pt;")
+        self.progress_eta.setStyleSheet("color: palette(window-text);")
         self.progress_eta.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
+        # These labels have stylesheets, so Qt 6 does not apply
+        # QApplication.setFont to them; set the fonts explicitly and keep them
+        # in sync in _font_size_changed. Both match the header status text
+        # ("listening").
+        self.progress_label.setFont(self.font())
+        self.progress_eta.setFont(self.font())
 
         progress_row = QHBoxLayout()
         progress_row.setContentsMargins(0, 0, 0, 0)
@@ -1445,6 +1451,9 @@ class MainWindow(QMainWindow):
             self.delete_btn,
             self.resume_btn,
             self.status_lbl,
+            self.font_lbl,
+            self.progress_label,
+            self.progress_eta,
             self.session_list,
         ):
             widget.setFont(font)

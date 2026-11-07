@@ -39,17 +39,29 @@ def hf_tqdm_class(
 ) -> type[hf_tqdm]:
     """Build a tqdm subclass for ``hf_hub_download(..., tqdm_class=...)``."""
 
+    # A file can have two bars: Xet's "downloading bytes" bar (compressed
+    # network progress) and its "reconstructing file" bar (bytes written).
+    # Either can lead at any moment, so publish the larger fraction and never
+    # move backwards within a file.
+    best = {"fraction": 0.0}
+
     class _ProgressTqdm(hf_tqdm):
         def __init__(self, *args, **kwargs):
+            # tqdm skips update() entirely when disabled, so its own `n` never
+            # advances; keep a local byte counter for the callback.
+            self._reported_bytes = int(kwargs.get("initial", 0) or 0)
             # The GUI owns the visible progress bar; keep the terminal clean.
             kwargs["disable"] = True
             super().__init__(*args, **kwargs)
 
         def update(self, n: int = 1) -> None:
             super().update(n)
-            if progress is not None:
-                fraction = self.n / self.total if self.total else None
-                progress(label, fraction)
+            self._reported_bytes += n
+            if progress is not None and self.total:
+                fraction = min(1.0, self._reported_bytes / self.total)
+                if fraction > best["fraction"]:
+                    best["fraction"] = fraction
+                    progress(label, fraction)
             check_cancel(cancel)
 
     return _ProgressTqdm
