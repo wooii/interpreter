@@ -36,7 +36,7 @@ from interpreter.common import (
     check_cancel,
     ensure_onnxruntime,
 )
-from interpreter.progress import hf_tqdm_class
+from interpreter.progress import download_guard, hf_tqdm_class
 from interpreter.speaker import UNCERTAIN, SpeakerAssigner
 from interpreter.translate import Translator
 
@@ -249,38 +249,40 @@ def _download_model_files(
     from huggingface_hub import hf_hub_download
 
     files = list(spec["files"].values())
-    for index, rel in enumerate(files, start=1):
+    with download_guard():
         check_cancel(cancel)
-        label = f"Downloading {name} ({index}/{len(files)})"
+        for index, rel in enumerate(files, start=1):
+            check_cancel(cancel)
+            label = f"Downloading {name} ({index}/{len(files)})"
 
-        def report(
-            text: str,
-            fraction: float | None,
-            *,
-            _index: int = index,
-        ) -> None:
-            if progress is None:
-                return
-            if fraction is None:
-                progress(text, None)
-            else:
-                progress(text, (_index - 1 + fraction) / len(files))
+            def report(
+                text: str,
+                fraction: float | None,
+                *,
+                _index: int = index,
+            ) -> None:
+                if progress is None:
+                    return
+                if fraction is None:
+                    progress(text, None)
+                else:
+                    progress(text, (_index - 1 + fraction) / len(files))
 
-        hf_hub_download(
-            spec["repo"],
-            rel,
-            repo_type="model",
-            local_dir=dest,
-            tqdm_class=(
-                hf_tqdm_class(label, report, cancel)
-                if (progress is not None or cancel is not None)
-                else None
-            ),
-        )
-        check_cancel(cancel)
-        if progress is not None:
-            progress(label, index / len(files))
-    (dest / ".complete").touch()
+            hf_hub_download(
+                spec["repo"],
+                rel,
+                repo_type="model",
+                local_dir=dest,
+                tqdm_class=(
+                    hf_tqdm_class(label, report, cancel)
+                    if (progress is not None or cancel is not None)
+                    else None
+                ),
+            )
+            check_cancel(cancel)
+            if progress is not None:
+                progress(label, index / len(files))
+        (dest / ".complete").touch()
 
 
 def _ensure_onnxruntime_dylib() -> None:
@@ -328,7 +330,8 @@ class VAD:
         if progress is not None:
             progress("Loading VAD", None)
         check_cancel(cancel)
-        self.model = _load_silero_vad()
+        with download_guard():
+            self.model = _load_silero_vad()
         check_cancel(cancel)
 
     def is_speech(self, frame):

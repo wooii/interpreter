@@ -11,11 +11,25 @@ from __future__ import annotations
 
 import threading
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 from huggingface_hub.utils import tqdm as hf_tqdm
 
 from interpreter.common import ProgressCallback, check_cancel
+
+# Only one model download runs at a time. Four loaders start concurrently, but
+# interleaved byte progress made the GUI bar jump between models (e.g. 0% STT
+# and 85% translation); serializing downloads gives one clean, monotonic bar
+# while model loading still runs concurrently after each download releases it.
+_download_lock = threading.Lock()
+
+
+@contextmanager
+def download_guard():
+    """Serialize downloads so progress is not interleaved across models."""
+    with _download_lock:
+        yield
 
 
 def hf_tqdm_class(

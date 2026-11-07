@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import UTC
@@ -94,6 +95,18 @@ def _saved_font_size() -> int:
         return int(str(QSettings().value("fontSize", _BASE_FONT_PT)))
     except TypeError, ValueError:
         return _BASE_FONT_PT
+
+
+def _format_seconds(seconds: float) -> str:
+    """Compact duration for the progress bar (``45s``, ``2m 05s``, ``1h 02m``)."""
+    total = max(0, int(seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
 
 
 @contextmanager
@@ -617,6 +630,9 @@ class SessionController:
         self._status_lock = threading.Lock()
         self._progress: tuple[str, float | None] | None = None
         self._progress_lock = threading.Lock()
+        self._progress_started = time.monotonic()
+        self._progress_samples: list[tuple[float, float]] = []
+        self._progress_last_fraction: float | None = None
         self._session: tuple[str, str] | None = None
         self._models: tuple[str, ...] = ()
 
@@ -629,17 +645,65 @@ class SessionController:
             return self._status
 
     def _report_progress(self, label: str, fraction: float | None) -> None:
+        now = time.monotonic()
         with self._progress_lock:
+            if fraction is None:
+                self._progress_samples.clear()
+            else:
+                fraction = max(0.0, min(1.0, fraction))
+                # A drop means the next model/file started at 0 — restart the
+                # ETA window instead of averaging across two downloads.
+                if (
+                    self._progress_last_fraction is not None
+                    and fraction + 0.005 < self._progress_last_fraction
+                ):
+                    self._progress_started = now
+                    self._progress_samples.clear()
+                self._progress_samples.append((now, fraction))
+                cutoff = now - 10.0
+                while self._progress_samples and self._progress_samples[0][0] < cutoff:
+                    self._progress_samples.pop(0)
+            self._progress_last_fraction = fraction
             self._progress = (label, fraction)
 
-    def _progress_value(self) -> tuple[str, float | None] | None:
+    def _reset_progress(self, label: str) -> None:
+        with self._progress_lock:
+            self._progress_started = time.monotonic()
+            self._progress_samples.clear()
+            self._progress_last_fraction = None
+            self._progress = (label, None)
+
+    def _progress_value(
+        self,
+    ) -> tuple[str, float | None, str | None] | None:
         with self._progress_lock:
             progress = self._progress
+            started = self._progress_started
+            samples = list(self._progress_samples)
         with self._status_lock:
             status = self._status
         if status == "stopping":
-            return ("Canceling…", None)
-        return progress
+            return ("Canceling…", None, None)
+        if progress is None:
+            return None
+
+        label, fraction = progress
+        now = time.monotonic()
+        elapsed = now - started
+        if fraction is None:
+            return (label, None, f"{_format_seconds(elapsed)} elapsed")
+        if fraction >= 0.999:
+            return (label, fraction, "finishing…")
+        detail = f"{_format_seconds(elapsed)} elapsed"
+        if len(samples) >= 2:
+            t0, f0 = samples[0]
+            t1, f1 = samples[-1]
+            if t1 > t0 and f1 > f0:
+                rate = (f1 - f0) / (t1 - t0)
+                if rate > 0.0005:
+                    eta = (1.0 - f1) / rate
+                    detail = "<1s left" if eta < 1 else f"~{_format_seconds(eta)} left"
+        return (label, fraction, detail)
 
     # --- live sessions ---------------------------------------------------
 
@@ -677,7 +741,7 @@ class SessionController:
         self._session = None
         self._models = ()
         self._store.clear()
-        self._report_progress("Starting…", None)
+        self._reset_progress("Starting…")
         # Flip the status synchronously: the new engine thread only reaches
         # "loading" a few microseconds after start(), so without this a waiter
         # polling right after launch reads the PREVIOUS session's stale
@@ -1097,28 +1161,49 @@ class MainWindow(QMainWindow):
         # slot that never reflows the header (see _poll).
         header.addWidget(self.status_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
 
+        self.progress_label = QLabel("")
+        self.progress_label.setStyleSheet("color: #334155; font-size: 10pt;")
+        self.progress_eta = QLabel("")
+        self.progress_eta.setStyleSheet("color: #64748b; font-size: 9pt;")
+        self.progress_eta.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(6)
+        progress_row.addWidget(self.progress_label, 1)
+        progress_row.addWidget(self.progress_eta, 0)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFixedHeight(16)
-        self.progress_bar.setFormat("Loading models…")
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(10)
         self.progress_bar.setStyleSheet(
             """
             QProgressBar {
-                background: #eef2f7;
-                border: 1px solid #dbe4f0;
-                border-radius: 8px;
-                color: #334155;
-                font-size: 10pt;
-                text-align: center;
+                background: #e8eef7;
+                border: 0;
+                border-radius: 5px;
             }
             QProgressBar::chunk {
-                background: #4f8cff;
-                border-radius: 7px;
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #4f8cff,
+                    stop: 0.55 #5f9bff,
+                    stop: 1 #86b7ff
+                );
+                border-radius: 5px;
             }
             """
         )
-        self.progress_bar.hide()
+        self.progress_panel = QWidget()
+        progress_layout = QVBoxLayout(self.progress_panel)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(3)
+        progress_layout.addLayout(progress_row)
+        progress_layout.addWidget(self.progress_bar)
+        self.progress_panel.hide()
 
         # --- transcript ------------------------------------------------------
         self.transcript = TranscriptPane()
@@ -1218,7 +1303,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
         layout.addLayout(header)
-        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.progress_panel)
         layout.addWidget(splitter, 1)
         self.setCentralWidget(central)
         main_layout = self.layout()
@@ -1669,19 +1754,24 @@ class MainWindow(QMainWindow):
 
         progress = st.get("progress")
         if status in ("starting", "loading", "stopping"):
-            progress_label, fraction = (
-                progress if progress is not None else ("Loading models…", None)
-            )
-            self.progress_bar.show()
+            if progress is not None:
+                progress_label, fraction, detail = progress
+            else:
+                progress_label, fraction, detail = "Loading models…", None, None
+            self.progress_panel.show()
+            self.progress_label.setText(progress_label)
             if fraction is None:
                 self.progress_bar.setRange(0, 0)
-                self.progress_bar.setFormat(progress_label)
+                self.progress_eta.setText(detail or "")
             else:
+                percent = max(0, min(100, int(fraction * 100)))
                 self.progress_bar.setRange(0, 100)
-                self.progress_bar.setValue(max(0, min(100, int(fraction * 100))))
-                self.progress_bar.setFormat(f"{progress_label}  %p%")
+                self.progress_bar.setValue(percent)
+                self.progress_eta.setText(
+                    f"{percent}%  ·  {detail}" if detail else f"{percent}%"
+                )
         else:
-            self.progress_bar.hide()
+            self.progress_panel.hide()
 
         if status.startswith("error"):
             # Full error goes into the transcript (the status line above is

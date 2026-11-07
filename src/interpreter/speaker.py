@@ -24,7 +24,7 @@ import numpy as np
 
 from interpreter import SPEAKER_MODELS_DIR
 from interpreter.common import ProgressCallback, check_cancel, ensure_onnxruntime
-from interpreter.progress import download_url
+from interpreter.progress import download_guard, download_url
 
 EN_MODEL = SPEAKER_MODELS_DIR / "wespeaker_en_voxceleb_resnet34.onnx"
 
@@ -138,14 +138,17 @@ def _ensure_en_model(
     if EN_MODEL.exists():
         return EN_MODEL
 
-    print("Downloading speaker-ID model (WeSpeaker en, 25 MB)...", flush=True)
-    download_url(
-        _MODEL_URL,
-        EN_MODEL,
-        label="Downloading speaker-ID model",
-        progress=progress,
-        cancel=cancel,
-    )
+    with download_guard():
+        if EN_MODEL.exists():
+            return EN_MODEL
+        print("Downloading speaker-ID model (WeSpeaker en, 25 MB)...", flush=True)
+        download_url(
+            _MODEL_URL,
+            EN_MODEL,
+            label="Downloading speaker-ID model",
+            progress=progress,
+            cancel=cancel,
+        )
     return EN_MODEL
 
 

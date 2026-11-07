@@ -25,7 +25,7 @@ from interpreter.common import (
     ProgressCallback,
     check_cancel,
 )
-from interpreter.progress import hf_tqdm_class
+from interpreter.progress import download_guard, hf_tqdm_class
 
 TRANSLATE_MODEL = "opus-mt-en-zh"
 
@@ -68,50 +68,53 @@ def _ensure_translate_model(
 
     from huggingface_hub import HfApi, hf_hub_download
 
-    check_cancel(cancel)
-    files = [
-        rel for rel in HfApi().list_repo_files(repo_id=repo) if rel in _TRANSLATE_FILES
-    ]
-    weights = [
-        rel for rel in files if rel in ("pytorch_model.bin", "model.safetensors")
-    ]
-    if not weights:
-        raise RuntimeError(f"{repo}: no PyTorch/safetensors weights found")
-    # Small config/tokenizer files first; the big weights file last.
-    files.sort(key=lambda rel: rel in weights)
-
-    for index, rel in enumerate(files, start=1):
+    with download_guard():
         check_cancel(cancel)
-        label = f"Downloading translation model ({index}/{len(files)})"
+        files = [
+            rel
+            for rel in HfApi().list_repo_files(repo_id=repo)
+            if rel in _TRANSLATE_FILES
+        ]
+        weights = [
+            rel for rel in files if rel in ("pytorch_model.bin", "model.safetensors")
+        ]
+        if not weights:
+            raise RuntimeError(f"{repo}: no PyTorch/safetensors weights found")
+        # Small config/tokenizer files first; the big weights file last.
+        files.sort(key=lambda rel: rel in weights)
 
-        def report(
-            text: str,
-            fraction: float | None,
-            *,
-            _index: int = index,
-        ) -> None:
-            if progress is None:
-                return
-            if fraction is None:
-                progress(text, None)
-            else:
-                progress(text, (_index - 1 + fraction) / len(files))
+        for index, rel in enumerate(files, start=1):
+            check_cancel(cancel)
+            label = f"Downloading translation model ({index}/{len(files)})"
 
-        hf_hub_download(
-            repo_id=repo,
-            filename=rel,
-            local_dir=str(dest),
-            tqdm_class=(
-                hf_tqdm_class(label, report, cancel)
-                if (progress is not None or cancel is not None)
-                else None
-            ),
-        )
-        check_cancel(cancel)
-        if progress is not None:
-            progress(label, index / len(files))
+            def report(
+                text: str,
+                fraction: float | None,
+                *,
+                _index: int = index,
+            ) -> None:
+                if progress is None:
+                    return
+                if fraction is None:
+                    progress(text, None)
+                else:
+                    progress(text, (_index - 1 + fraction) / len(files))
 
-    (dest / ".complete").touch()
+            hf_hub_download(
+                repo_id=repo,
+                filename=rel,
+                local_dir=str(dest),
+                tqdm_class=(
+                    hf_tqdm_class(label, report, cancel)
+                    if (progress is not None or cancel is not None)
+                    else None
+                ),
+            )
+            check_cancel(cancel)
+            if progress is not None:
+                progress(label, index / len(files))
+
+        (dest / ".complete").touch()
     return dest
 
 
