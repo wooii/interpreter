@@ -23,7 +23,8 @@ from pathlib import Path
 import numpy as np
 
 from interpreter import SPEAKER_MODELS_DIR
-from interpreter.common import ensure_onnxruntime
+from interpreter.common import ProgressCallback, check_cancel, ensure_onnxruntime
+from interpreter.progress import download_url
 
 EN_MODEL = SPEAKER_MODELS_DIR / "wespeaker_en_voxceleb_resnet34.onnx"
 
@@ -129,14 +130,22 @@ def _ensure_onnxruntime_runtime() -> None:
     ensure_onnxruntime()
 
 
-def _ensure_en_model() -> Path:
+def _ensure_en_model(
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: threading.Event | None = None,
+) -> Path:
     if EN_MODEL.exists():
         return EN_MODEL
-    import urllib.request
 
-    SPEAKER_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     print("Downloading speaker-ID model (WeSpeaker en, 25 MB)...", flush=True)
-    urllib.request.urlretrieve(_MODEL_URL, EN_MODEL)
+    download_url(
+        _MODEL_URL,
+        EN_MODEL,
+        label="Downloading speaker-ID model",
+        progress=progress,
+        cancel=cancel,
+    )
     return EN_MODEL
 
 
@@ -157,9 +166,18 @@ class SpeakerAssigner:
     they form a tight self-consistent cluster — see module docstring).
     """
 
-    def __init__(self, model_path: Path | str = EN_MODEL) -> None:
+    def __init__(
+        self,
+        model_path: Path | str = EN_MODEL,
+        *,
+        progress: ProgressCallback | None = None,
+        cancel: threading.Event | None = None,
+    ) -> None:
         ensure_onnxruntime()
-        _ensure_en_model()
+        _ensure_en_model(progress=progress, cancel=cancel)
+        check_cancel(cancel)
+        if progress is not None:
+            progress("Loading speaker-ID model", None)
         import sherpa_onnx  # heavy — import only when speaker ID is enabled
 
         self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(

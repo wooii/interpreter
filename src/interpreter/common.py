@@ -21,7 +21,27 @@ import importlib.util
 import os
 import shutil
 import sys
+import threading
+from collections.abc import Callable
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Progress / cancellation (model downloads are cancellable from the GUI)
+# ---------------------------------------------------------------------------
+
+
+class OperationCancelled(Exception):
+    """Raised when the user cancels a model download/load."""
+
+
+ProgressCallback = Callable[[str, float | None], None]
+
+
+def check_cancel(cancel: threading.Event | None) -> None:
+    """Raise :class:`OperationCancelled` if the caller cancelled the load."""
+    if cancel is not None and cancel.is_set():
+        raise OperationCancelled()
+
 
 # ---------------------------------------------------------------------------
 # onnxruntime shim for sherpa-onnx

@@ -69,7 +69,7 @@ If `uv` is not found in the current shell after the installer, the `command -v u
 
 1. Launch it with `open dist/Interpreter.app`, or double-click it in Finder.
 2. On first use, allow microphone access when macOS asks.
-3. Choose Listen or Dictate and press Start. Model weights download on first use (~2.3 GB total), not during `uv sync`; the status line shows loading.
+3. Choose Listen or Dictate and press Start. The header progress bar shows model download/loading progress; **Stop** cancels a first-run download and returns to idle. Model weights download on first use (~1 GB for listen; ~240 MB for mixed dictate), not during `uv sync`; the status line shows loading.
 4. Optional: drag `dist/Interpreter.app` to `/Applications`. It still runs this repo's `.venv`; do not copy the bundle or `.venv` to another Mac.
 5. If a Finder launch fails, check `~/Library/Logs/Interpreter.log`.
 

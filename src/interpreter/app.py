@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -63,6 +64,7 @@ from PySide6.QtWidgets import (
 )
 
 from interpreter import DATA_DIR, PROJECT_ROOT
+from interpreter.common import OperationCancelled
 from interpreter.speaker import EN_MODEL
 from interpreter.transcribe import (
     STT_MODEL_EN_ONLY,
@@ -610,8 +612,11 @@ class SessionController:
         self._engine: RealTimeTranscribe | None = None
         self._thread: threading.Thread | None = None
         self._stop_requested = False
+        self._cancel_event = threading.Event()
         self._status = "idle"
         self._status_lock = threading.Lock()
+        self._progress: tuple[str, float | None] | None = None
+        self._progress_lock = threading.Lock()
         self._session: tuple[str, str] | None = None
         self._models: tuple[str, ...] = ()
 
@@ -622,6 +627,19 @@ class SessionController:
     def _status_value(self) -> str:
         with self._status_lock:
             return self._status
+
+    def _report_progress(self, label: str, fraction: float | None) -> None:
+        with self._progress_lock:
+            self._progress = (label, fraction)
+
+    def _progress_value(self) -> tuple[str, float | None] | None:
+        with self._progress_lock:
+            progress = self._progress
+        with self._status_lock:
+            status = self._status
+        if status == "stopping":
+            return ("Canceling…", None)
+        return progress
 
     # --- live sessions ---------------------------------------------------
 
@@ -655,9 +673,11 @@ class SessionController:
                 return
             self._thread = None
         self._stop_requested = False
+        self._cancel_event = threading.Event()
         self._session = None
         self._models = ()
         self._store.clear()
+        self._report_progress("Starting…", None)
         # Flip the status synchronously: the new engine thread only reaches
         # "loading" a few microseconds after start(), so without this a waiter
         # polling right after launch reads the PREVIOUS session's stale
@@ -695,6 +715,7 @@ class SessionController:
             audio_file = mode_dir / f"{mode}_{timestamp}.flac"
         self._session = (mode, audio_file.stem)
         self._set_status("loading")
+        self._report_progress("Loading models…", None)
         models = [f"stt: {stt}"]
         if translate:
             models.append(f"translate: {TRANSLATE_MODEL}")
@@ -713,11 +734,16 @@ class SessionController:
                 resume_from=resume,
                 renderer=self._store,
                 quiet=True,
+                progress=self._report_progress,
+                cancel_event=self._cancel_event,
             )
+        except OperationCancelled:
+            self._set_status("stopped")
+            return
         except Exception as exc:  # noqa: BLE001 - surfaced to the UI
             self._set_status(f"error: {exc}")
             return
-        if self._stop_requested:
+        if self._stop_requested or self._cancel_event.is_set():
             self._stop_requested = False
             self._set_status("stopped")
             return
@@ -748,6 +774,9 @@ class SessionController:
             self._engine.stop()
         elif self._thread is not None and self._thread.is_alive():
             self._stop_requested = True
+            self._cancel_event.set()
+            self._set_status("stopping")
+            self._report_progress("Canceling…", None)
 
     def shutdown(self) -> None:
         """Window-close hook: stop the engine BEFORE the window tears down,
@@ -758,6 +787,9 @@ class SessionController:
             self._engine.stop()
         elif self._thread is not None and self._thread.is_alive():
             self._stop_requested = True
+            self._cancel_event.set()
+            self._set_status("stopping")
+            self._report_progress("Canceling…", None)
 
     def pull(self) -> dict:
         snapshot, version = self._store.pull()
@@ -770,6 +802,7 @@ class SessionController:
                 else None
             ),
             "models": self._models,
+            "progress": self._progress_value(),
         }
 
     # --- session history ---------------------------------------------------
@@ -1064,6 +1097,29 @@ class MainWindow(QMainWindow):
         # slot that never reflows the header (see _poll).
         header.addWidget(self.status_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
 
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setFormat("Loading models…")
+        self.progress_bar.setStyleSheet(
+            """
+            QProgressBar {
+                background: #eef2f7;
+                border: 1px solid #dbe4f0;
+                border-radius: 8px;
+                color: #334155;
+                font-size: 10pt;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background: #4f8cff;
+                border-radius: 7px;
+            }
+            """
+        )
+        self.progress_bar.hide()
+
         # --- transcript ------------------------------------------------------
         self.transcript = TranscriptPane()
         self.transcript.setReadOnly(True)
@@ -1162,6 +1218,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
         layout.addLayout(header)
+        layout.addWidget(self.progress_bar)
         layout.addWidget(splitter, 1)
         self.setCentralWidget(central)
         main_layout = self.layout()
@@ -1609,6 +1666,22 @@ class MainWindow(QMainWindow):
         )
         if label != self.status_lbl.toolTip():
             self.status_lbl.setToolTip(label)
+
+        progress = st.get("progress")
+        if status in ("starting", "loading", "stopping"):
+            progress_label, fraction = (
+                progress if progress is not None else ("Loading models…", None)
+            )
+            self.progress_bar.show()
+            if fraction is None:
+                self.progress_bar.setRange(0, 0)
+                self.progress_bar.setFormat(progress_label)
+            else:
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(max(0, min(100, int(fraction * 100))))
+                self.progress_bar.setFormat(f"{progress_label}  %p%")
+        else:
+            self.progress_bar.hide()
 
         if status.startswith("error"):
             # Full error goes into the transcript (the status line above is

@@ -29,7 +29,14 @@ import torch
 from jiwer import cer, wer
 
 from interpreter import TRANSCRIBE_MODELS_DIR
-from interpreter.common import _contains_cjk, _is_cjk_char, ensure_onnxruntime
+from interpreter.common import (
+    ProgressCallback,
+    _contains_cjk,
+    _is_cjk_char,
+    check_cancel,
+    ensure_onnxruntime,
+)
+from interpreter.progress import hf_tqdm_class
 from interpreter.speaker import UNCERTAIN, SpeakerAssigner
 from interpreter.translate import Translator
 
@@ -228,7 +235,12 @@ MODEL_SPECS: dict[str, dict] = {
 }
 
 
-def _download_model_files(name: str) -> None:
+def _download_model_files(
+    name: str,
+    *,
+    progress: ProgressCallback | None = None,
+    cancel: threading.Event | None = None,
+) -> None:
     spec = MODEL_SPECS[name]
     dest = TRANSCRIBE_MODELS_DIR / name
     if (dest / ".complete").exists():
@@ -236,8 +248,38 @@ def _download_model_files(name: str) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     from huggingface_hub import hf_hub_download
 
-    for rel in spec["files"].values():
-        hf_hub_download(spec["repo"], rel, repo_type="model", local_dir=dest)
+    files = list(spec["files"].values())
+    for index, rel in enumerate(files, start=1):
+        check_cancel(cancel)
+        label = f"Downloading {name} ({index}/{len(files)})"
+
+        def report(
+            text: str,
+            fraction: float | None,
+            *,
+            _index: int = index,
+        ) -> None:
+            if progress is None:
+                return
+            if fraction is None:
+                progress(text, None)
+            else:
+                progress(text, (_index - 1 + fraction) / len(files))
+
+        hf_hub_download(
+            spec["repo"],
+            rel,
+            repo_type="model",
+            local_dir=dest,
+            tqdm_class=(
+                hf_tqdm_class(label, report, cancel)
+                if (progress is not None or cancel is not None)
+                else None
+            ),
+        )
+        check_cancel(cancel)
+        if progress is not None:
+            progress(label, index / len(files))
     (dest / ".complete").touch()
 
 
@@ -271,11 +313,23 @@ def _load_silero_vad():
 class VAD:
     """Voice activity detection"""
 
-    def __init__(self, frame_size=512, sample_rate=16000, speech_threshold=0.4):
+    def __init__(
+        self,
+        frame_size=512,
+        sample_rate=16000,
+        speech_threshold=0.4,
+        *,
+        progress: ProgressCallback | None = None,
+        cancel: threading.Event | None = None,
+    ):
         self.frame_size = frame_size
         self.sample_rate = sample_rate
         self.speech_threshold = speech_threshold
+        if progress is not None:
+            progress("Loading VAD", None)
+        check_cancel(cancel)
         self.model = _load_silero_vad()
+        check_cancel(cancel)
 
     def is_speech(self, frame):
         if len(frame) != self.frame_size:
@@ -351,11 +405,21 @@ class SherpaStt:
     (whisper.cpp/Moonshine dropped). Weights download anonymously from HF.
     """
 
-    def __init__(self, model_name: str, num_threads: int = 4) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        num_threads: int = 4,
+        *,
+        progress: ProgressCallback | None = None,
+        cancel: threading.Event | None = None,
+    ) -> None:
         spec = MODEL_SPECS[model_name]
         self.model_name = model_name
-        _download_model_files(model_name)
+        _download_model_files(model_name, progress=progress, cancel=cancel)
         ensure_onnxruntime()
+        check_cancel(cancel)
+        if progress is not None:
+            progress(f"Loading {model_name}", None)
         import sherpa_onnx
 
         kwargs: dict[str, object] = {
@@ -409,9 +473,15 @@ class SpeechToText:
     output is uncolored (uniform), a known limitation (docs/benchmark_transcribe.md).
     """
 
-    def __init__(self, model_name):
+    def __init__(
+        self,
+        model_name,
+        *,
+        progress: ProgressCallback | None = None,
+        cancel: threading.Event | None = None,
+    ):
         self.model_name = model_name
-        self.model: Any = SherpaStt(model_name)
+        self.model: Any = SherpaStt(model_name, progress=progress, cancel=cancel)
 
     def transcribe(self, audio: np.ndarray):
         audio = audio.astype(np.float32)
@@ -577,12 +647,16 @@ class RealTimeTranscribe:
         resume_from=None,
         renderer: BaseRenderer | None = None,
         quiet: bool = False,
+        progress: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ):
         self.audio_file_path = audio_file_path
         self.input_path = input_path
         self.resume_from = Path(resume_from) if resume_from is not None else None
         self.clean = clean
         self.quiet = quiet
+        self.progress = progress
+        self.cancel_event = cancel_event
         self.renderer = (
             renderer if renderer is not None else TerminalRenderer(clean=clean)
         )
@@ -604,7 +678,11 @@ class RealTimeTranscribe:
     def _load_models(self, stt_model, translate_model, translate_to, speaker_id):
         """VAD / Translator / STT / Speaker are independent model stacks — load
         them concurrently so startup waits for the slowest load, not their sum.
-        Failures surface in the main thread after the workers join."""
+        Failures surface in the main thread after the workers join.
+        ``cancel_event`` aborts downloads; ``progress`` reports label/fraction."""
+        check_cancel(self.cancel_event)
+        if self.progress is not None:
+            self.progress("Loading models…", None)
         loaded: dict[str, Any] = {}
         errors: list[BaseException] = []
 
@@ -614,35 +692,64 @@ class RealTimeTranscribe:
             except Exception as exc:  # noqa: BLE001 - re-raised in the main thread below
                 errors.append(exc)
 
+        progress, cancel = self.progress, self.cancel_event
         threads = [
             threading.Thread(
                 target=_load,
-                args=("vad", lambda: VAD(self.frame_size, self.sample_rate)),
+                args=(
+                    "vad",
+                    lambda: VAD(
+                        self.frame_size,
+                        self.sample_rate,
+                        progress=progress,
+                        cancel=cancel,
+                    ),
+                ),
+                daemon=True,
             ),
             threading.Thread(
                 target=_load,
                 args=(
                     "translator",
                     lambda: (
-                        Translator(model=translate_model, target_lang=translate_to)
+                        Translator(
+                            model=translate_model,
+                            target_lang=translate_to,
+                            progress=progress,
+                            cancel=cancel,
+                        )
                         if translate_to
                         else None
                     ),
                 ),
+                daemon=True,
             ),
             threading.Thread(
                 target=_load,
-                args=("stt", lambda: SpeechToText(stt_model)),
+                args=(
+                    "stt",
+                    lambda: SpeechToText(stt_model, progress=progress, cancel=cancel),
+                ),
+                daemon=True,
             ),
             threading.Thread(
                 target=_load,
-                args=("speaker", lambda: SpeakerAssigner() if speaker_id else None),
+                args=(
+                    "speaker",
+                    lambda: (
+                        SpeakerAssigner(progress=progress, cancel=cancel)
+                        if speaker_id
+                        else None
+                    ),
+                ),
+                daemon=True,
             ),
         ]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
+        check_cancel(cancel)
         if errors:
             raise errors[0]
         return (
