@@ -2,8 +2,12 @@
 
 Measures WER/CER (+ per-block), RTF, peak RSS, segments. Usage:
   ``python -m interpreter benchmark --list`` / ``benchmark [models] [--samples ...] [--task stt|translate|speaker]``
+  ``benchmark --fetch [--task ...]`` downloads/builds the corpus and exits.
 Default: one subprocess per model (OOM → "excluded: OOM", 8 GB budget);
 ``--in-process`` for debugging. Results: ``data/benchmark/{transcribe,translate,speaker}/results/*.json``.
+Corpus manifests are tracked in ``benchmark/``; audio samples are a
+gitignored cache under ``data/benchmark/`` and can be absent for ``--list``.
+Runs fetch missing assets automatically unless ``--no-fetch`` is given.
 Env: sherpa auto-plumbs onnxruntime via :mod:`interpreter.common` (pinned 1.13.0/1.24.4).
 """
 
@@ -20,26 +24,21 @@ from pathlib import Path
 
 import soundfile as sf
 
-from interpreter import (
-    DATA_DIR,
-    SPEAKER_MODELS_DIR,
-    TRANSCRIBE_MODELS_DIR,
+from interpreter import SPEAKER_MODELS_DIR, TRANSCRIBE_MODELS_DIR
+from interpreter.benchmark_assets import (
+    SPEAKER_BUILT_MANIFEST,
+    SPEAKER_MANIFEST,
+    SPEAKER_RESULTS_DIR,
+    SPEAKER_SAMPLES_DIR,
+    TRANSCRIBE_DIR,
+    TRANSCRIBE_MANIFEST,
+    TRANSCRIBE_RESULTS_DIR,
+    TRANSLATE_MANIFEST,
+    TRANSLATE_RESULTS_DIR,
+    ensure_assets,
 )
 from interpreter.common import ensure_onnxruntime, onnxruntime_capi_dir
 from interpreter.transcribe import MODEL_SPECS as _TRANSCRIBE_SPECS
-
-BENCH_DIR = DATA_DIR / "benchmark"
-TRANSCRIBE_DIR = BENCH_DIR / "transcribe"
-TRANSLATE_DIR = BENCH_DIR / "translate"
-TRANSCRIBE_RESULTS_DIR = TRANSCRIBE_DIR / "results"
-TRANSLATE_RESULTS_DIR = TRANSLATE_DIR / "results"
-TRANSCRIBE_MANIFEST = TRANSCRIBE_DIR / "manifest.json"
-TRANSLATE_MANIFEST = TRANSLATE_DIR / "manifest.json"
-SPEAKER_DIR = BENCH_DIR / "speaker"
-SPEAKER_SAMPLES_DIR = SPEAKER_DIR / "samples"
-SPEAKER_RESULTS_DIR = SPEAKER_DIR / "results"
-SPEAKER_MANIFEST = SPEAKER_DIR / "manifest.json"
-
 
 # ---------------------------------------------------------------------------
 # Manifest / samples
@@ -57,9 +56,24 @@ class Sample:
     blocks: list[dict] = field(
         default_factory=list
     )  # [{lang, start, end}] word idx into ref
+    source: str | None = None  # upstream locator for single-source samples
+    parts: list[str] | None = None  # source sample ids for generated mixed clips
+
+    def audio_path(self) -> Path:
+        return TRANSCRIBE_DIR / self.path
 
     def duration(self) -> float:
-        return sf.info(str(TRANSCRIBE_DIR / self.path)).duration
+        return sf.info(str(self.audio_path())).duration
+
+
+def _duration_label(sample: Sample) -> str:
+    """Display duration for --list; missing/unreadable audio must not fail it."""
+    if not sample.audio_path().is_file():
+        return "missing"
+    try:
+        return f"{sample.duration():.1f}s"
+    except Exception:  # noqa: BLE001 - one bad file must not break --list
+        return "unreadable"
 
 
 def load_manifest(path: Path = TRANSCRIBE_MANIFEST) -> list[Sample]:
@@ -234,7 +248,7 @@ class _Sherpa(Adapter):
         self.load_s = time.perf_counter() - t0
 
     def transcribe(self, sample: Sample):
-        audio, sr = sf.read(str(TRANSCRIBE_DIR / sample.path), dtype="float32")
+        audio, sr = sf.read(str(sample.audio_path()), dtype="float32")
         stream = self.recognizer.create_stream()
         stream.accept_waveform(sr, audio)
         t0 = time.perf_counter()
@@ -782,12 +796,15 @@ def build_speaker_manifest() -> dict:
             "test": [rel(c) for c in clips[ENROLL_CLIPS : ENROLL_CLIPS + TEST_CLIPS]],
         }
     manifest = {"speakers": speakers}
-    SPEAKER_MANIFEST.write_text(json.dumps(manifest, indent=2))
+    SPEAKER_BUILT_MANIFEST.write_text(json.dumps(manifest, indent=2))
     return manifest
 
 
 def load_speaker_manifest() -> dict:
-    return json.loads(SPEAKER_MANIFEST.read_text(encoding="utf-8"))
+    path = (
+        SPEAKER_BUILT_MANIFEST if SPEAKER_BUILT_MANIFEST.is_file() else SPEAKER_MANIFEST
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _embed_clip(extractor, path: Path):
@@ -933,6 +950,14 @@ def _print_speaker_merged(rows: list[dict]) -> None:
         )
 
 
+def _prepare_assets(task: str, *, force: bool = False) -> None:
+    try:
+        ensure_assets(task, force=force)
+    except Exception as exc:
+        print(f"Benchmark asset fetch failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("models", nargs="*", help="model names (default: all)")
@@ -944,6 +969,21 @@ def main() -> None:
     )
     parser.add_argument("--samples", nargs="*", help="sample ids (default: all)")
     parser.add_argument("--list", action="store_true", help="list models and samples")
+    parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="download/build the corpus for --task, then exit",
+    )
+    parser.add_argument(
+        "--force-fetch",
+        action="store_true",
+        help="with --fetch, rebuild even when the cache is complete",
+    )
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="never download benchmark assets automatically",
+    )
     parser.add_argument(
         "--in-process",
         action="store_true",
@@ -959,6 +999,10 @@ def main() -> None:
     )
     parser.add_argument("seconds", nargs="?", type=float, default=30.0)
     args = parser.parse_args()
+    if args.force_fetch and not args.fetch:
+        parser.error("--force-fetch requires --fetch")
+    if args.fetch and args.no_fetch:
+        parser.error("--fetch and --no-fetch are mutually exclusive")
 
     if args.record:
         import sounddevice as sd
@@ -969,27 +1013,39 @@ def main() -> None:
         sd.wait()
         sf.write(args.record, audio, fs)
         print(
-            f"Saved {args.record} — add it + a reference to data/benchmark/transcribe/manifest.json"
+            f"Saved {args.record} — add it + a reference to benchmark/transcribe.json"
         )
         return
 
-    samples = load_manifest()
-    if args.samples:
-        samples = [s for s in samples if s.id in args.samples]
+    if args.fetch:
+        _prepare_assets(args.task, force=args.force_fetch)
+        print(f"Benchmark assets ready for task: {args.task}")
+        return
 
     if args.list:
         print("Task:", args.task)
         if args.task == "translate":
             print("Models:", ", ".join(translate_models()))
-            print(
-                "Sentences:",
-                len(load_translate_manifest()),
-                "en->zh (wmt19 validation)",
-            )
+            if TRANSLATE_MANIFEST.is_file():
+                print(
+                    "Sentences:",
+                    len(load_translate_manifest()),
+                    "en->zh (wmt19 validation)",
+                )
+            else:
+                print("Sentences: manifest missing:", TRANSLATE_MANIFEST)
             return
         if args.task == "speaker":
             print("Models:", ", ".join(speaker_models()))
-            manifest = build_speaker_manifest()
+            if SPEAKER_SAMPLES_DIR.is_dir():
+                manifest = build_speaker_manifest()
+            else:
+                manifest = load_speaker_manifest()
+                print(
+                    "Samples: assets missing under",
+                    SPEAKER_SAMPLES_DIR,
+                    "— run: uv run python -m interpreter benchmark --task speaker --fetch",
+                )
             n_clips = sum(len(d["test"]) for d in manifest["speakers"].values())
             print(
                 "Speakers:",
@@ -1001,9 +1057,22 @@ def main() -> None:
             )
             return
         print("Models:", ", ".join(available_models()))
+        if not TRANSCRIBE_MANIFEST.is_file():
+            print("Samples: manifest missing:", TRANSCRIBE_MANIFEST)
+            return
+        samples = load_manifest()
+        if args.samples:
+            samples = [s for s in samples if s.id in args.samples]
         print("Samples:")
         for s in samples:
-            print(f"  {s.id}  mode={s.mode}  {s.duration():.1f}s  lang={s.lang}")
+            print(f"  {s.id}  mode={s.mode}  {_duration_label(s)}  lang={s.lang}")
+        missing = [s for s in samples if not s.audio_path().is_file()]
+        if missing:
+            print(
+                f"Audio: {len(missing)}/{len(samples)} files missing under "
+                f"{TRANSCRIBE_DIR / 'samples'} — run: "
+                "uv run python -m interpreter benchmark --fetch"
+            )
         return
 
     if args.task == "translate":
@@ -1033,6 +1102,18 @@ def main() -> None:
         return
 
     if args.task == "speaker":
+        if not args.no_fetch:
+            _prepare_assets("speaker")
+        if not SPEAKER_SAMPLES_DIR.is_dir():
+            print(
+                f"Speaker samples missing under {SPEAKER_SAMPLES_DIR}",
+                file=sys.stderr,
+            )
+            print(
+                "Run: uv run python -m interpreter benchmark --task speaker --fetch",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         manifest = build_speaker_manifest()
         names = args.models or speaker_models()
         SPEAKER_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1048,6 +1129,25 @@ def main() -> None:
         if not args.no_merged:
             _print_speaker_merged(merged)
         return
+
+    if not args.no_fetch:
+        _prepare_assets("stt")
+
+    samples = load_manifest()
+    if args.samples:
+        samples = [s for s in samples if s.id in args.samples]
+    missing = [s for s in samples if not s.audio_path().is_file()]
+    if missing:
+        print(
+            f"{len(missing)}/{len(samples)} STT audio files missing under "
+            f"{TRANSCRIBE_DIR / 'samples'}",
+            file=sys.stderr,
+        )
+        print(
+            "Run: uv run python -m interpreter benchmark --fetch",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     names = args.models or available_models()
     TRANSCRIBE_RESULTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -73,6 +73,19 @@ def ensure_onnxruntime() -> None:
             libs = sorted(capi.glob("libonnxruntime.so.*"))
             if libs:
                 plain.symlink_to(libs[-1].name)
+        # sherpa's extension declares libonnxruntime.so as a NEEDED library and
+        # the dynamic loader does not search onnxruntime's capi dir. Put a
+        # symlink next to sherpa's own .so (the loader searches a library's
+        # RUNPATH, which includes sherpa_onnx/lib). LD_LIBRARY_PATH covers
+        # child processes; the current process needs the link.
+        spec = importlib.util.find_spec("sherpa_onnx")
+        if spec is not None and spec.submodule_search_locations:
+            sherpa_lib = Path(spec.submodule_search_locations[0]) / "lib"
+            sherpa_lib.mkdir(parents=True, exist_ok=True)
+            dest = sherpa_lib / "libonnxruntime.so"
+            if not dest.exists():
+                dest.unlink(missing_ok=True)
+                dest.symlink_to(plain)
         path = os.environ.get("LD_LIBRARY_PATH", "")
         os.environ["LD_LIBRARY_PATH"] = f"{capi}{os.pathsep}{path}"
     except Exception:  # noqa: S110, BLE001 - best-effort env fix

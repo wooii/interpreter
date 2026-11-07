@@ -5,7 +5,7 @@ Record date: **2026-08-24** — 60 STT samples per model (20 en-only, 20 zh-only
 decisions from container numbers only. The 2026-08-23 30-sample pass is retained
 as reference below.
 
-Status: **container pass re-run done (2026-08-24)** — 60 STT samples per model (20 en-only, 20 zh-only, 20 zh↔en mixed), 15-model registry; decisions from container numbers only. The 2026-08-23 30-sample pass is retained as reference below.
+Status: **container pass re-run done (2026-08-24)** — 60 STT samples per model (20 en-only, 20 zh-only, 20 zh↔en mixed), 15-model registry; decisions from container numbers only. The 2026-08-23 30-sample pass is retained as reference below. The current reproducible corpus has 59 samples (19 en / 20 zh / 20 mixed); the 60-sample pass below is the historical record.
 
 ## Task
 
@@ -16,10 +16,11 @@ The harness (`src/interpreter/benchmark.py`) selects tasks with `--task`:
 Directory layout:
 
 ```
-data/benchmark/
-└── transcribe/                    # STT assets
-    ├── manifest.json              # STT samples (60: 20 en / 20 zh / 20 mixed, gold refs + blocks)
-    ├── models/                    # downloaded STT weights
+benchmark/
+└── transcribe.json                # tracked: 59 samples (19 en / 20 zh / 20 mixed; refs + blocks)
+
+data/benchmark/                    # gitignored cache (created by the asset fetch)
+└── transcribe/
     ├── samples/                   # STT audio
     └── results/
         ├── <model>.json           # per-model STT results
@@ -60,8 +61,8 @@ exclusions are rare — size/license policy exclusions (below) now dominate.
 
 ### Corpus & metrics
 
-- **en-only** (20): LibriSpeech test-clean clips (speaker 61-70968, utterances
-  0000–0008 and 0010–0019) + the project's 60 s test recording (`en_10`) — word-level **WER**.
+- **en-only** (19): LibriSpeech test-clean clips (speaker 61-70968, utterances
+  0000–0008 and 0010–0019) — word-level **WER**.
 - **zh-only** (20): AISHELL-1 utterances BAC009S0002W0123–W0142 (official HF
   repo, Apache 2.0) — char-level **CER** (zh has no word boundaries; the
   reference is word-segmented while model output is not).
@@ -70,9 +71,9 @@ exclusions are rare — size/license policy exclusions (below) now dominate.
   block scores (en block WER + zh block CER), i.e. the model's
   simultaneous-multilingual capability.
 - **RTF** = decode wall time ÷ audio duration (< 1.0 = faster than real time). The
-  average is inflated by the short 3–5 s clips (fixed overhead); `en_10` (60 s) is the
-  long-audio datapoint. Container RTF is relative (the M4 host is faster; ~13–18× on
-  the old 4-core profile) — the ranking is what matters.
+  average is inflated by the short 3–5 s clips (fixed overhead). Container RTF is
+  relative (the M4 host is faster; ~13–18× on the old 4-core profile) — the
+  ranking is what matters.
 - **Peak RSS MB** per model process — the memory budget check.
 - Whole-text WER/CER on zh-containing samples is inflated by reference word-spacing —
   block scores are authoritative.
@@ -90,6 +91,7 @@ exclusions are rare — size/license policy exclusions (below) now dominate.
 ### How to run
 
 ```bash
+uv run python -m interpreter.benchmark --fetch                       # download/build STT audio
 uv run python -m interpreter.benchmark --list                        # models + samples
 uv run python -m interpreter.benchmark                               # all STT models, one subprocess each
 uv run python -m interpreter.benchmark parakeet-tdt-0.6b-v2 sensevoice
@@ -171,7 +173,7 @@ policy (2026-08-24).
   per-sample inspection: (a) most of the gap is punctuation — v3 (Granary-trained,
   punctuation-preserving) inserts commas/final periods that the word-level WER counts
   as errors; 13 of 20 samples are word-identical; (b) the one real word-level
-  regression is the 60 s `en_10` (0.127 → 0.239: dropped phrase, "two time"/"thirty"
+  regression is on long-form English (0.127 → 0.239: dropped phrase, "two time"/"thirty"
   errors) — v3 is weaker on long-form English than the en-only v2 (human-transcribed
   NeMo ASR Set vs largely pseudo-labeled Granary). The whisper family
   adds nothing new: faster-whisper `small` (0.187) and openai whisper-small (0.196) are

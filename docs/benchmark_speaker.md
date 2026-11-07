@@ -98,6 +98,7 @@ stretch" is the same device voice (not the user reading), which invalidated pass
 ## Repro
 
 ```bash
+UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync python -m interpreter benchmark --task speaker --fetch
 UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync python -m interpreter benchmark --task speaker --list
 UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync python -m interpreter benchmark --task speaker
 ```

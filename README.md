@@ -69,6 +69,27 @@ venvs are machine-specific; rebuild there with the steps above.
 
 The first run downloads model weights to `data/models/` (`transcribe/` → `sensevoicesmall`/`parakeet-unified-en-0.6b`, `translate/` → `opus-mt-en-zh`, `speaker/` → WeSpeaker) anonymously from Hugging Face.
 
+## Benchmark
+
+The benchmark harness is separate from the app; normal app use doesn't need it.
+
+Tracked corpus definitions:
+
+- `benchmark/transcribe.json` — 59 STT samples (19 en / 20 zh / 20 mixed) with references, block boundaries, source locators, and mixed-clip recipes.
+- `benchmark/translate.json` — 100 WMT19 `newsdev2019` en→zh sentences.
+- `benchmark/speaker.json` — LibriSpeech dev-clean enroll/test split (14 speakers, 3 enroll + 10 test clips each).
+
+Audio and result files are a gitignored cache under `data/benchmark/`. Fetch with:
+
+```bash
+uv run python -m interpreter benchmark --fetch                 # STT corpus (~380 MB download)
+uv run python -m interpreter benchmark --task speaker --fetch  # speaker corpus (~340 MB download)
+```
+
+Runs fetch missing assets automatically unless `--no-fetch` is passed, and `--list` works from a fresh clone. Results and merged tables land under `data/benchmark/*/results/`; `docs/` contains the source-controlled historical records and is not regenerated.
+
+Sources/licences: LibriSpeech (CC-BY-4.0, OpenSLR SLR12); AISHELL-1 (Apache-2.0, Hugging Face `AISHELL/AISHELL-1`); WMT19 `newsdev2019` (research use; cite the WMT19 shared-task overview).
+
 ## Roadmap
 
 See `PLAN.md` for the modernization plan and `docs/` for the benchmark records.

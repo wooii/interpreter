@@ -9,7 +9,7 @@ reference below.
 ### Corpus & metrics
 
 - **100 sentences** from the wmt19 zh-en validation split (`newsdev2019`) in
-  `data/benchmark/translate/manifest.json`.
+  `benchmark/translate.json`.
 - **BLEU(zh)** via sacrebleu with `tokenize="zh"`.
 - **ms/sentence** — decode wall time averaged over the corpus (LLM RTT dominated by
   ollama server round-trips, not model compute).
@@ -23,6 +23,9 @@ uv run python -m interpreter.benchmark --task translate --list
 uv run python -m interpreter.benchmark --task translate              # all translate models
 uv run python -m interpreter.benchmark --task translate opus-mt-en-zh
 ```
+
+The translate corpus is text-only and its manifest is tracked; no asset fetch is
+needed.
 
 Run in the container: prefix every command with
 `UV_PROJECT_ENVIRONMENT=.venv-container uv run --no-sync` (AGENTS.md).

@@ -1,0 +1,1271 @@
+{
+  "samples": [
+    {
+      "id": "en_01",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_01.wav",
+      "lang": "en",
+      "ref": "HE BEGAN A CONFUSED COMPLAINT AGAINST THE WIZARD WHO HAD VANISHED BEHIND THE CURTAIN ON THE LEFT",
+      "source": "librispeech:test-clean/61/70968/61-70968-0000.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 17,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_02",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_02.wav",
+      "lang": "en",
+      "ref": "GIVE NOT SO EARNEST A MIND TO THESE MUMMERIES CHILD",
+      "source": "librispeech:test-clean/61/70968/61-70968-0001.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 10,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_03",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_03.wav",
+      "lang": "en",
+      "ref": "A GOLDEN FORTUNE AND A HAPPY LIFE",
+      "source": "librispeech:test-clean/61/70968/61-70968-0002.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 7,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_04",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_04.wav",
+      "lang": "en",
+      "ref": "HE WAS LIKE UNTO MY FATHER IN A WAY AND YET WAS NOT MY FATHER",
+      "source": "librispeech:test-clean/61/70968/61-70968-0003.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 15,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_05",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_05.wav",
+      "lang": "en",
+      "ref": "ALSO THERE WAS A STRIPLING PAGE WHO TURNED INTO A MAID",
+      "source": "librispeech:test-clean/61/70968/61-70968-0004.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 11,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_06",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_06.wav",
+      "lang": "en",
+      "ref": "THIS WAS SO SWEET A LADY SIR AND IN SOME MANNER I DO THINK SHE DIED",
+      "source": "librispeech:test-clean/61/70968/61-70968-0005.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 16,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_07",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_07.wav",
+      "lang": "en",
+      "ref": "BUT THEN THE PICTURE WAS GONE AS QUICKLY AS IT CAME",
+      "source": "librispeech:test-clean/61/70968/61-70968-0006.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 11,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_08",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_08.wav",
+      "lang": "en",
+      "ref": "SISTER NELL DO YOU HEAR THESE MARVELS",
+      "source": "librispeech:test-clean/61/70968/61-70968-0007.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 7,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "en_09",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_09.wav",
+      "lang": "en",
+      "ref": "TAKE YOUR PLACE AND LET US SEE WHAT THE CRYSTAL CAN SHOW TO YOU",
+      "source": "librispeech:test-clean/61/70968/61-70968-0008.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 14,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_01",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_01.wav",
+      "lang": "zh",
+      "ref": "也 成为 地方 政府 的 眼中 钉",
+      "source": "aishell:BAC009S0002W0123",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 7,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_02",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_02.wav",
+      "lang": "zh",
+      "ref": "自 六月 底 呼和浩特 市 率先 宣布 取消 限 购 后",
+      "source": "aishell:BAC009S0002W0124",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_03",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_03.wav",
+      "lang": "zh",
+      "ref": "各地 政府 便 纷纷 跟进",
+      "source": "aishell:BAC009S0002W0125",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 5,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_04",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_04.wav",
+      "lang": "zh",
+      "ref": "仅 一 个 多 月 的 时间 里",
+      "source": "aishell:BAC009S0002W0126",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 8,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_05",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_05.wav",
+      "lang": "zh",
+      "ref": "除了 北京 上海 广州 深圳 四 个 一 线 城市 和 三亚 之外",
+      "source": "aishell:BAC009S0002W0127",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 13,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_06",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_06.wav",
+      "lang": "zh",
+      "ref": "四十六 个 限 购 城市 当中",
+      "source": "aishell:BAC009S0002W0128",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 6,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_07",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_07.wav",
+      "lang": "zh",
+      "ref": "四十一 个 已 正式 取消 或 变相 放松 了 限 购",
+      "source": "aishell:BAC009S0002W0129",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_08",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_08.wav",
+      "lang": "zh",
+      "ref": "财政 金融 政策 紧随 其后 而来",
+      "source": "aishell:BAC009S0002W0130",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 6,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_09",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_09.wav",
+      "lang": "zh",
+      "ref": "显示 出 了 极 强 的 威力",
+      "source": "aishell:BAC009S0002W0131",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 7,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "zh_10",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_10.wav",
+      "lang": "zh",
+      "ref": "放松 了 与 自 往 需求 密切 相关 的 房贷 政策",
+      "source": "aishell:BAC009S0002W0132",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_01",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_01.wav",
+      "lang": "zh",
+      "ref": "HE BEGAN A CONFUSED COMPLAINT AGAINST THE WIZARD WHO HAD VANISHED BEHIND THE CURTAIN ON THE LEFT 也 成为 地方 政府 的 眼中 钉",
+      "parts": [
+        "en_01",
+        "zh_01"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 17,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 17,
+          "end": 24,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_02",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_02.wav",
+      "lang": "zh",
+      "ref": "自 六月 底 呼和浩特 市 率先 宣布 取消 限 购 后 GIVE NOT SO EARNEST A MIND TO THESE MUMMERIES CHILD",
+      "parts": [
+        "zh_02",
+        "en_02"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 11,
+          "end": 21,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_03",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_03.wav",
+      "lang": "zh",
+      "ref": "A GOLDEN FORTUNE AND A HAPPY LIFE 各地 政府 便 纷纷 跟进 HE WAS LIKE UNTO MY FATHER IN A WAY AND YET WAS NOT MY FATHER",
+      "parts": [
+        "en_03",
+        "zh_03",
+        "en_04"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 7,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 7,
+          "end": 12,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 12,
+          "end": 27,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_04",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_04.wav",
+      "lang": "zh",
+      "ref": "仅 一 个 多 月 的 时间 里 ALSO THERE WAS A STRIPLING PAGE WHO TURNED INTO A MAID 除了 北京 上海 广州 深圳 四 个 一 线 城市 和 三亚 之外",
+      "parts": [
+        "zh_04",
+        "en_05",
+        "zh_05"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 8,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 8,
+          "end": 19,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 19,
+          "end": 32,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_05",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_05.wav",
+      "lang": "zh",
+      "ref": "THIS WAS SO SWEET A LADY SIR AND IN SOME MANNER I DO THINK SHE DIED 四十六 个 限 购 城市 当中",
+      "parts": [
+        "en_06",
+        "zh_06"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 16,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 16,
+          "end": 22,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_06",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_06.wav",
+      "lang": "zh",
+      "ref": "四十一 个 已 正式 取消 或 变相 放松 了 限 购 BUT THEN THE PICTURE WAS GONE AS QUICKLY AS IT CAME",
+      "parts": [
+        "zh_07",
+        "en_07"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 11,
+          "end": 22,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_07",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_07.wav",
+      "lang": "zh",
+      "ref": "SISTER NELL DO YOU HEAR THESE MARVELS 财政 金融 政策 紧随 其后 而来 TAKE YOUR PLACE AND LET US SEE WHAT THE CRYSTAL CAN SHOW TO YOU",
+      "parts": [
+        "en_08",
+        "zh_08",
+        "en_09"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 7,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 7,
+          "end": 13,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 13,
+          "end": 27,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_08",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_08.wav",
+      "lang": "zh",
+      "ref": "显示 出 了 极 强 的 威力 HE BEGAN A CONFUSED COMPLAINT AGAINST THE WIZARD WHO HAD VANISHED BEHIND THE CURTAIN ON THE LEFT 放松 了 与 自 往 需求 密切 相关 的 房贷 政策",
+      "parts": [
+        "zh_09",
+        "en_01",
+        "zh_10"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 7,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 7,
+          "end": 24,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 24,
+          "end": 35,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_09",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_09.wav",
+      "lang": "zh",
+      "ref": "HE WAS LIKE UNTO MY FATHER IN A WAY AND YET WAS NOT MY FATHER 各地 政府 便 纷纷 跟进 ALSO THERE WAS A STRIPLING PAGE WHO TURNED INTO A MAID",
+      "parts": [
+        "en_04",
+        "zh_03",
+        "en_05"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 15,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 15,
+          "end": 20,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 20,
+          "end": 31,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_10",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_10.wav",
+      "lang": "zh",
+      "ref": "四十六 个 限 购 城市 当中 THIS WAS SO SWEET A LADY SIR AND IN SOME MANNER I DO THINK SHE DIED 四十一 个 已 正式 取消 或 变相 放松 了 限 购",
+      "parts": [
+        "zh_06",
+        "en_06",
+        "zh_07"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 6,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 6,
+          "end": 22,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 22,
+          "end": 33,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_11",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_11.wav",
+      "lang": "en",
+      "ref": "FORTHWITH ALL RAN TO THE OPENING OF THE TENT TO SEE WHAT MIGHT BE AMISS BUT MASTER WILL WHO PEEPED OUT FIRST NEEDED NO MORE THAN ONE GLANCE",
+      "source": "librispeech:test-clean/61/70968/61-70968-0010.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 28,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_11",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_11.wav",
+      "lang": "zh",
+      "ref": "其中 包括 对 拥有 一 套住 房 并 已 结清 相应 购房 贷款 的 家庭",
+      "source": "aishell:BAC009S0002W0133",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 15,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_12",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_12.wav",
+      "lang": "en",
+      "ref": "HE GAVE WAY TO THE OTHERS VERY READILY AND RETREATED UNPERCEIVED BY THE SQUIRE AND MISTRESS FITZOOTH TO THE REAR OF THE TENT",
+      "source": "librispeech:test-clean/61/70968/61-70968-0011.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 23,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_12",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_12.wav",
+      "lang": "zh",
+      "ref": "为 改善 居住 条件 再次 申请 贷款 购买 普通 商品 住房",
+      "source": "aishell:BAC009S0002W0134",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_13",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_13.wav",
+      "lang": "en",
+      "ref": "CRIES OF A NOTTINGHAM A NOTTINGHAM",
+      "source": "librispeech:test-clean/61/70968/61-70968-0012.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 6,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_13",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_13.wav",
+      "lang": "zh",
+      "ref": "银行 业金 融机 构 执行 首套 房贷 款 政策",
+      "source": "aishell:BAC009S0002W0135",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 9,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_14",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_14.wav",
+      "lang": "en",
+      "ref": "BEFORE THEM FLED THE STROLLER AND HIS THREE SONS CAPLESS AND TERRIFIED",
+      "source": "librispeech:test-clean/61/70968/61-70968-0013.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 12,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_14",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_14.wav",
+      "lang": "zh",
+      "ref": "这个 后来 被 称 为 九三零 新政 策 的 措施",
+      "source": "aishell:BAC009S0002W0136",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 10,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_15",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_15.wav",
+      "lang": "en",
+      "ref": "WHAT IS THE TUMULT AND RIOTING CRIED OUT THE SQUIRE AUTHORITATIVELY AND HE BLEW TWICE ON A SILVER WHISTLE WHICH HUNG AT HIS BELT",
+      "source": "librispeech:test-clean/61/70968/61-70968-0014.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 24,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_15",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_15.wav",
+      "lang": "zh",
+      "ref": "被 市场 公认 为 是 今年 对 楼市 影响 最 大 的 一 个 政策",
+      "source": "aishell:BAC009S0002W0137",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 15,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_16",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_16.wav",
+      "lang": "en",
+      "ref": "NAY WE REFUSED THEIR REQUEST MOST POLITELY MOST NOBLE SAID THE LITTLE STROLLER",
+      "source": "librispeech:test-clean/61/70968/61-70968-0015.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 13,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_16",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_16.wav",
+      "lang": "zh",
+      "ref": "以 提高 住房 公积金 缴存 职工 住房 消费 能力",
+      "source": "aishell:BAC009S0002W0138",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 9,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_17",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_17.wav",
+      "lang": "en",
+      "ref": "AND THEN THEY BECAME VEXED AND WOULD HAVE SNATCHED YOUR PURSE FROM US",
+      "source": "librispeech:test-clean/61/70968/61-70968-0016.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 13,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_17",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_17.wav",
+      "lang": "zh",
+      "ref": "支持 缴存 职工 购买 首套 和 改善 型 自 住 住房",
+      "source": "aishell:BAC009S0002W0139",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_18",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_18.wav",
+      "lang": "en",
+      "ref": "I COULD NOT SEE MY BOY INJURED EXCELLENCE FOR BUT DOING HIS DUTY AS ONE OF CUMBERLAND'S SONS",
+      "source": "librispeech:test-clean/61/70968/61-70968-0017.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 18,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_18",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_18.wav",
+      "lang": "zh",
+      "ref": "通过 财政 补贴 手段 鼓励 购房 的 地区 也 在 不 断 增加",
+      "source": "aishell:BAC009S0002W0140",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 13,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_19",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_19.wav",
+      "lang": "en",
+      "ref": "SO I DID PUSH THIS FELLOW",
+      "source": "librispeech:test-clean/61/70968/61-70968-0018.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 6,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_19",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_19.wav",
+      "lang": "zh",
+      "ref": "其中 多项 政策 惠及 购房 者",
+      "source": "aishell:BAC009S0002W0141",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 6,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "en_20",
+      "mode": "A",
+      "category": "en",
+      "path": "samples/en_20.wav",
+      "lang": "en",
+      "ref": "IT IS ENOUGH SAID GEORGE GAMEWELL SHARPLY AND HE TURNED UPON THE CROWD",
+      "source": "librispeech:test-clean/61/70968/61-70968-0019.flac",
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 13,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "zh_20",
+      "mode": "B",
+      "category": "zh",
+      "path": "samples/zh_20.wav",
+      "lang": "zh",
+      "ref": "尚未 取消 限 购",
+      "source": "aishell:BAC009S0002W0142",
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 4,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_11",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_11.wav",
+      "lang": "zh",
+      "ref": "FORTHWITH ALL RAN TO THE OPENING OF THE TENT TO SEE WHAT MIGHT BE AMISS BUT MASTER WILL WHO PEEPED OUT FIRST NEEDED NO MORE THAN ONE GLANCE 其中 包括 对 拥有 一 套住 房 并 已 结清 相应 购房 贷款 的 家庭",
+      "parts": [
+        "en_11",
+        "zh_11"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 28,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 28,
+          "end": 43,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_12",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_12.wav",
+      "lang": "zh",
+      "ref": "为 改善 居住 条件 再次 申请 贷款 购买 普通 商品 住房 HE GAVE WAY TO THE OTHERS VERY READILY AND RETREATED UNPERCEIVED BY THE SQUIRE AND MISTRESS FITZOOTH TO THE REAR OF THE TENT",
+      "parts": [
+        "zh_12",
+        "en_12"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 11,
+          "end": 34,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_13",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_13.wav",
+      "lang": "zh",
+      "ref": "CRIES OF A NOTTINGHAM A NOTTINGHAM 银行 业金 融机 构 执行 首套 房贷 款 政策 BEFORE THEM FLED THE STROLLER AND HIS THREE SONS CAPLESS AND TERRIFIED",
+      "parts": [
+        "en_13",
+        "zh_13",
+        "en_14"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 6,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 6,
+          "end": 15,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 15,
+          "end": 27,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_14",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_14.wav",
+      "lang": "zh",
+      "ref": "这个 后来 被 称 为 九三零 新政 策 的 措施 WHAT IS THE TUMULT AND RIOTING CRIED OUT THE SQUIRE AUTHORITATIVELY AND HE BLEW TWICE ON A SILVER WHISTLE WHICH HUNG AT HIS BELT 被 市场 公认 为 是 今年 对 楼市 影响 最 大 的 一 个 政策",
+      "parts": [
+        "zh_14",
+        "en_15",
+        "zh_15"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 10,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 10,
+          "end": 34,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 34,
+          "end": 49,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_15",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_15.wav",
+      "lang": "zh",
+      "ref": "NAY WE REFUSED THEIR REQUEST MOST POLITELY MOST NOBLE SAID THE LITTLE STROLLER 以 提高 住房 公积金 缴存 职工 住房 消费 能力",
+      "parts": [
+        "en_16",
+        "zh_16"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 13,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 13,
+          "end": 22,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_16",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_16.wav",
+      "lang": "zh",
+      "ref": "支持 缴存 职工 购买 首套 和 改善 型 自 住 住房 AND THEN THEY BECAME VEXED AND WOULD HAVE SNATCHED YOUR PURSE FROM US",
+      "parts": [
+        "zh_17",
+        "en_17"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 11,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 11,
+          "end": 24,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_17",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_17.wav",
+      "lang": "zh",
+      "ref": "I COULD NOT SEE MY BOY INJURED EXCELLENCE FOR BUT DOING HIS DUTY AS ONE OF CUMBERLAND'S SONS 通过 财政 补贴 手段 鼓励 购房 的 地区 也 在 不 断 增加 SO I DID PUSH THIS FELLOW",
+      "parts": [
+        "en_18",
+        "zh_18",
+        "en_19"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 18,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 18,
+          "end": 31,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 31,
+          "end": 37,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_18",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_18.wav",
+      "lang": "zh",
+      "ref": "其中 多项 政策 惠及 购房 者 IT IS ENOUGH SAID GEORGE GAMEWELL SHARPLY AND HE TURNED UPON THE CROWD 尚未 取消 限 购",
+      "parts": [
+        "zh_19",
+        "en_20",
+        "zh_20"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 6,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 6,
+          "end": 19,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 19,
+          "end": 23,
+          "metric": "cer"
+        }
+      ]
+    },
+    {
+      "id": "mx_19",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_19.wav",
+      "lang": "zh",
+      "ref": "HE GAVE WAY TO THE OTHERS VERY READILY AND RETREATED UNPERCEIVED BY THE SQUIRE AND MISTRESS FITZOOTH TO THE REAR OF THE TENT 被 市场 公认 为 是 今年 对 楼市 影响 最 大 的 一 个 政策 AND THEN THEY BECAME VEXED AND WOULD HAVE SNATCHED YOUR PURSE FROM US",
+      "parts": [
+        "en_12",
+        "zh_15",
+        "en_17"
+      ],
+      "blocks": [
+        {
+          "lang": "en",
+          "start": 0,
+          "end": 23,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 23,
+          "end": 38,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 38,
+          "end": 51,
+          "metric": "wer"
+        }
+      ]
+    },
+    {
+      "id": "mx_20",
+      "mode": "B",
+      "category": "mixed",
+      "path": "samples/mx_20.wav",
+      "lang": "zh",
+      "ref": "这个 后来 被 称 为 九三零 新政 策 的 措施 SO I DID PUSH THIS FELLOW 以 提高 住房 公积金 缴存 职工 住房 消费 能力",
+      "parts": [
+        "zh_14",
+        "en_19",
+        "zh_16"
+      ],
+      "blocks": [
+        {
+          "lang": "zh",
+          "start": 0,
+          "end": 10,
+          "metric": "cer"
+        },
+        {
+          "lang": "en",
+          "start": 10,
+          "end": 16,
+          "metric": "wer"
+        },
+        {
+          "lang": "zh",
+          "start": 16,
+          "end": 25,
+          "metric": "cer"
+        }
+      ]
+    }
+  ]
+}
